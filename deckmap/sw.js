@@ -11,7 +11,7 @@
    - state.json: what is stored, for bridge.js. */
 importScripts('reader-core.js');
 
-var VER = 'r22';
+var VER = 'r23';
 var PREFIX = 'msc-reader:' + MSCR.SCOPE + ':';
 var SHELL = PREFIX + VER;
 var FILES = ['./', 'reader-core.js', 'bridge.js', 'reader.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
@@ -54,6 +54,24 @@ function check(force, manual) {
   return run;
 }
 
+/* r23 (27.11.2026: on a Samsung phone with Samsung Internet the data page stayed plain navy): until the page has fully
+   loaded, a screen "Opening the data… 12 s" instead of nothing, with the first error of the page if one comes, so that a
+   photo of the screen tells slow from broken. It goes at the page's "load" (also if bridge.js never runs), at the latest 5 s
+   after the page is parsed (a picture or frame still loading cannot keep it). Before the
+   page's own <html>: the class on <html> is ours (the page's <html> has none), the style and script land in <head>. */
+var OPENING = '<style>html.mscr-wait body::before{content:var(--mscr-msg,"");position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483646;' +
+  'display:flex;align-items:center;justify-content:center;text-align:center;white-space:pre-line;padding:24px;' +
+  'background:#000A3C;color:#fff;font:600 17px/1.5 system-ui,-apple-system,sans-serif}</style>' +
+  '<script>(function(){var d=document.documentElement,t0=Date.now(),err="",IT=/^it/i.test(navigator.language||"");' +
+  'd.className="mscr-wait";' +
+  'function q(s){return \'"\'+String(s).replace(/[\\\\"]/g,"\\\\$&").replace(/\\n/g,"\\\\A ")+\'"\';}' +
+  'function show(){var s=Math.round((Date.now()-t0)/1000),m=(IT?"Apertura dei dati\\u2026 ":"Opening the data\\u2026 ")+s+" s";' +
+  'if(s>=20)m+=IT?"\\nPagina grande: su alcuni telefoni la prima apertura richiede qualche minuto.":"\\nA large page: on some phones the first opening takes a few minutes.";' +
+  'if(err)m+=(IT?"\\n\\nErrore: ":"\\n\\nError: ")+err;d.style.setProperty("--mscr-msg",q(m));}' +
+  'show();var iv=setInterval(show,1000);' +
+  'addEventListener("error",function(e){if(!err&&e&&e.message){err=String(e.message).slice(0,160)+(e.lineno?" ("+e.lineno+")":"");show();}});' +
+  'function done(){clearInterval(iv);d.classList.remove("mscr-wait");}' +
+  'addEventListener("load",done);addEventListener("DOMContentLoaded",function(){setTimeout(done,5000);});})();</script>';
 function appendTail(text) {
   var tail = new TextEncoder().encode(text);
   return new TransformStream({ flush: function (ctl) { ctl.enqueue(tail); } });
@@ -101,7 +119,7 @@ function serveApp() {
       /* r19: with photos, the page learns before its own scripts run that /ph/... answers (as in the Live program,
          window.__MSC_PH); an own doctype first keeps standards mode, the page's doctype later is ignored */
       var body = MSCR.gunzip(gz).pipeThrough(appendTail('\n<script src="bridge.js"></script>\n'));
-      if (hasPh) body = body.pipeThrough(prependHead('<!DOCTYPE html><script>window.__MSC_PH=1;</script>\n'));
+      body = body.pipeThrough(prependHead('<!DOCTYPE html>' + OPENING + (hasPh ? '<script>window.__MSC_PH=1;</script>' : '') + '\n'));
       return new Response(body, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
     }, function (e) { return toIndex(String(e && e.message || e)); });
   });
