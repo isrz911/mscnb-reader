@@ -205,6 +205,16 @@
   var MARKS = [[[26.1, 93.9]], [[24, 49.6, 48, 4.6]], [[74, 86.2, 17, 11.2]], [[8, 64.8, 86, 5.2]], [[80, 30.4, 16.4, 4.4], [80, 8.2, 16.4, 5]]];
 
   function show(id, on) { $(id).classList.toggle('hide', !on); }
+  /* r18: real progress of a download, "Downloading data… 6.1 / 15.2 MB" (reader-core.js posts it) */
+  var dlOn = false, bcI = null;
+  function mbs(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0); }
+  try { bcI = new BroadcastChannel('msc-reader:' + MSCR.SCOPE); } catch (e) { bcI = null; }
+  if (bcI) bcI.onmessage = function (e) {
+    var m = e.data || {};
+    if (m.t !== 'prog' || !dlOn || !m.total) return;
+    prog(Math.max(3, Math.min(100, m.got / m.total * 100)));
+    $('msg').textContent = T.dl + ' ' + mbs(m.got) + ' / ' + mbs(m.total) + ' MB';
+  };
   function msg(t, cls) { show('c-msg', !!t); $('msg').textContent = t || ''; $('msg').className = cls || ''; }
   function prog(p) { show('prog', p !== null); if (p !== null) $('prog').firstChild.style.width = Math.round(p) + '%'; }
   function fill(s, o) { return s.replace(/\{(\w+)\}/g, function (_, k) { return o[k]; }); }
@@ -336,8 +346,8 @@
       if (Q.get('err')) msg(T.stored + Q.get('err'), 'err');
       if (cfg && !cur && cfg.src) {          // automatic mode, first data (r17: on mobile data only a look, the tap downloads)
         var autoNet = MSCR.autoAllowed();
-        if (autoNet) { msg(T.dl); prog(10); }
-        return MSCR.checkAndRecord(location.href).then(function (r) { prog(null); if (!r) return MSCR.get('last').then(function (l) { msg(T.dlErr + (l && l.err || ''), 'err'); }); if (autoNet) msg(''); }).then(load);
+        if (autoNet) { msg(T.dl); prog(3); dlOn = true; }
+        return MSCR.checkAndRecord(location.href).then(function (r) { dlOn = false; prog(null); if (!r) return MSCR.get('last').then(function (l) { msg(T.dlErr + (l && l.err || ''), 'err'); }); if (autoNet) msg(''); }).then(load);
       }
     }).then(function () {
       /* straight to the data, unless the person came here to update, or just opened the access link in a browser tab */
@@ -369,9 +379,9 @@
     new Promise(function (res) { res(takeLink($('link').value)); }).then(function () { location.replace('./'); }, function (e) { msg(T.link + e.message, 'err'); });
   };
   $('b-check').onclick = function () {
-    msg(T.dl); prog(30);
+    msg(T.dl); prog(3); dlOn = true;
     MSCR.checkAndRecord(location.href, { manual: true }).then(function (r) {
-      prog(null);
+      dlOn = false; prog(null);
       return load().then(function () {
         render();
         if (!r) return MSCR.get('last').then(function (l) { msg(T.dlErr + (l && l.err || ''), 'err'); });

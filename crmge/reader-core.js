@@ -81,6 +81,29 @@
      One reader per folder of the site (deckmap/, crmge/): storage and caches are per origin, so their names carry the
      folder. In the page and in the service worker './' is the same folder. */
   var SCOPE = new URL('./', self.location.href).pathname;
+  /* r18: download progress for the open pages (the worker downloads, the page shows "6.1 / 15.2 MB") */
+  var BC = null;
+  try { BC = new BroadcastChannel('msc-reader:' + SCOPE); } catch (e) { BC = null; }
+  function readBody(r, total) {
+    if (!r.body || !r.body.getReader) return r.arrayBuffer();
+    var rd = r.body.getReader(), parts = [], got = 0, last = 0;
+    function more() {
+      return rd.read().then(function (x) {
+        if (x.done) {
+          var u = new Uint8Array(got), o = 0;
+          parts.forEach(function (p) { u.set(p, o); o += p.length; });
+          if (BC) BC.postMessage({ t: 'prog', got: got, total: total || got, done: true });
+          return u.buffer;
+        }
+        parts.push(x.value); got += x.value.length;
+        var now = Date.now();
+        if (BC && now - last > 200) { last = now; BC.postMessage({ t: 'prog', got: got, total: total }); }
+        return more();
+      });
+    }
+    if (BC) BC.postMessage({ t: 'prog', got: 0, total: total });
+    return more();
+  }
   var dbp = null;
   function db() {
     if (!dbp) dbp = new Promise(function (res, rej) {
@@ -185,7 +208,7 @@
           return put('cur', cur).then(function () { return { status: 'same', batch: cur.batch, lm: cur.lm }; });
         }
         if (probe) return { status: 'pending', batch: hb, lm: hl, size: hs };
-        return r.arrayBuffer().then(function (buf) {
+        return readBody(r, +(r.headers.get('Content-Length') || 0) || hs).then(function (buf) {
           return inspect(buf, cfg.k).then(function (st) {
             var rec = { dat: buf, batch: st.batch, lm: st.lm, size: buf.byteLength, at: Date.now(), from: 'net',
                         etag: etag, lastmod: lastmod, src: src.href };
@@ -231,20 +254,34 @@
     return Promise.all([get('cfg'), get('cur')]).then(function (a) { return checkSource(base, a[0], a[1], opt); }).then(function (r) {
       var l = { at: Date.now(), status: r.status, err: '' };
       if (r.status === 'pending') l.pend = { batch: r.batch || '', lm: r.lm || '', size: r.size || 0 };
-      return put('last', l).then(function () { return r; });
+      return put('last', l).then(function () { return r.status === 'manual' ? null : put('seen', l.at); }).then(function () { return r; });
     }, function (e) {
       return put('last', { at: Date.now(), status: 'err', err: String(e && e.message || e) }).then(function () { return null; });
     });
   }
   /* what is stored, without the data itself */
   function stateOf(ver) {
-    return Promise.all([get('cfg'), get('cur'), get('last')]).then(function (a) {
-      var cfg = a[0] || {}, cur = a[1] || {}, last = a[2] || {};
+    return Promise.all([get('cfg'), get('cur'), get('last'), get('seen')]).then(function (a) {
+      var cfg = a[0] || {}, cur = a[1] || {}, last = a[2] || {}, seen = a[3] || 0;
       var pend = last.status === 'pending' && last.pend && last.pend.batch !== cur.batch ? last.pend : null;
+      var age = cur.batch ? ageHours(cur) : -1;
+      /* r18: not up to date? automatic mode: the source was not reached since new data may have come (the chain runs on
+         working days at 08..20 every 2 hours; with the upload a new file is there about 90 minutes later); manual mode:
+         older than a day */
+      var stale = !cur.batch ? false : cfg.src ? seen < lastSlot(Date.now()) : age >= 24;
       return { ver: ver || '', mode: cfg.src ? 'auto' : (cfg.k ? 'manual' : 'none'), name: cfg.n || '', dir: cfg.dir || '',
                batch: cur.batch || '', lm: cur.lm || '', size: cur.size || 0, at: cur.at || 0, from: cur.from || '', last: last,
-               age: cur.batch ? ageHours(cur) : -1, pend: pend, auto: autoAllowed() };
+               age: age, pend: pend, auto: autoAllowed(), seen: seen, stale: stale };
     });
+  }
+  /* the newest moment new data may be waiting: a working day, 08:00, 10:00 ... 20:00, plus 90 minutes, not after now */
+  function lastSlot(now) {
+    var d = new Date(now);
+    for (var i = 0; i < 9 * 24; i++) {
+      var t = new Date(d.getFullYear(), d.getMonth(), d.getDate(), d.getHours() - i, 0, 0), h = t.getHours(), wd = t.getDay();
+      if (wd >= 1 && wd <= 5 && h >= 8 && h <= 20 && h % 2 === 0 && t.getTime() + 90 * 60000 <= now) return t.getTime() + 90 * 60000;
+    }
+    return 0;
   }
 
   /* age of the data: "lm" is the time of the data in Italy, "27.11.2026 08:00 LT" (the devices are in Italy too) */
@@ -259,6 +296,6 @@
 
   G.MSCR = { SCOPE: SCOPE, lmTime: lmTime, ageHours: ageHours, unpackGz: unpackGz, gunzip: gunzip, inspect: inspect, parseStampJs: parseStampJs, parseLink: parseLink,
              importFile: importFile, checkSource: checkSource, checkAndRecord: checkAndRecord, stateOf: stateOf,
-             tokenOf: tokenOf, autoAllowed: autoAllowed, netType: netType,
+             tokenOf: tokenOf, autoAllowed: autoAllowed, netType: netType, lastSlot: lastSlot,
              get: get, put: put, del: del };
 })(self);

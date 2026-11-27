@@ -94,23 +94,111 @@
       pendBtn = document.createElement('button');
       pendBtn.style.cssText = pillStyle('rgba(30,122,58,.95)');
       pendBtn.onclick = function () {
-        pendBtn.disabled = true; pendBtn.textContent = IT ? 'Download…' : 'Downloading…';
+        busy = true; pendBtn.disabled = true; pendBtn.textContent = IT ? 'Download…' : 'Downloading…';
         fetch('state.json?now=1&net=' + (netAllowed() ? 1 : 0), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (n) {
+          busy = false;
           if (n && n.batch && n.batch !== shown) { location.reload(); return; }
-          pendBtn.disabled = false; showPend(n);
-        }).catch(function () { pendBtn.disabled = false; pendBtn.textContent = IT ? 'Riprova' : 'Try again'; });
+          pendBtn.disabled = false; showPend(n); autoPill(n);
+        }).catch(function () { busy = false; pendBtn.disabled = false; pendBtn.textContent = IT ? 'Riprova' : 'Try again'; });
       };
       document.body.appendChild(pendBtn);
     }
     pendBtn.textContent = '⇣ ' + (IT ? 'Nuovi dati · ' : 'New data · ') + mb + ' MB';
     pendBtn.title = (IT ? 'Dati del ' : 'Data of ') + (s.pend.lm || '?') + (IT ? '. Tocca per scaricare' : '. Tap to download');
   }
+  /* r18: automatic mode, the button "⇅ <age>" on every network: a tap looks for new data now and downloads it (also on a
+     mobile network: the person decides), with the megabytes on the button; the worker reports them (BroadcastChannel) */
+  var autoBtn = null, busy = false, small = null;
+  function mbs(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0); }
+  var bc = null;
+  try { bc = new BroadcastChannel('msc-reader:' + new URL('./', location.href).pathname); } catch (e) { bc = null; }
+  if (bc) bc.onmessage = function (e) {
+    var m = e.data || {}, b = busy && (autoBtn || pendBtn);
+    if (m.t === 'prog' && b && m.total) { b.style.width = ''; b.style.padding = '0 11px'; b.textContent = '⇣ ' + mbs(m.got) + ' / ' + mbs(m.total) + ' MB'; }
+  };
+  function shrink(el) {
+    clearTimeout(small);
+    small = setTimeout(function () {
+      if (busy || !el.isConnected) return;
+      el.textContent = '⇅'; el.style.padding = '0'; el.style.width = '32px'; el.style.textAlign = 'center'; el.style.opacity = '.85';
+    }, 6000);
+  }
+  function autoPill(s) {
+    if (!s || s.mode !== 'auto' || (s.pend && s.pend.size)) { if (autoBtn) { autoBtn.remove(); autoBtn = null; } return; }
+    if (busy) return;
+    if (!autoBtn) {
+      autoBtn = document.createElement('button');
+      autoBtn.onclick = function () { updateNow(autoBtn); };
+      document.body.appendChild(autoBtn);
+    }
+    autoBtn.style.cssText = pillStyle(s.stale ? 'rgba(154,91,0,.92)' : 'rgba(0,10,60,.80)');
+    autoBtn.textContent = '⇅ ' + ageText(s.age);
+    autoBtn.title = (IT ? 'Dati del ' : 'Data of ') + (s.lm || '?') + (IT ? '. Tocca per cercare nuovi dati' : '. Tap to look for new data');
+    autoBtn.setAttribute('aria-label', autoBtn.title);
+    shrink(autoBtn);
+  }
+  function updateNow(btn) {
+    if (busy) return;
+    busy = true; btn.disabled = true;
+    btn.style.width = ''; btn.style.padding = '0 11px'; btn.style.opacity = '1';
+    btn.textContent = IT ? 'Controllo…' : 'Checking…';
+    fetch('state.json?now=1&net=' + (netAllowed() ? 1 : 0), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (n) {
+      busy = false; btn.disabled = false;
+      if (n && n.batch && n.batch !== shown) { location.reload(); return; }
+      var err = n && n.last && n.last.status === 'err';
+      btn.textContent = err ? (IT ? 'Nessuna connessione' : 'No connection') : (IT ? '✓ Aggiornati' : '✓ Up to date');
+      staleBar(n);
+      setTimeout(function () { showPend(n); autoPill(n); }, 2500);
+    }).catch(function () {
+      busy = false; btn.disabled = false; btn.textContent = IT ? 'Nessuna connessione' : 'No connection';
+    });
+  }
+
+  /* r18: a reminder at the top when the data may be out of date: the source could not be reached since new data may have
+     come (no network, phone off), or (manual mode) the data is older than a day. Closes with x; comes back while it is so. */
+  var bar = null, barOff = false;
+  function when(ms) {
+    if (!ms) return IT ? 'mai' : 'never';
+    var d = new Date(ms), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  function staleBar(s) {
+    var on = !!(s && s.stale) && !barOff;
+    if (!on) { if (bar) { bar.remove(); bar = null; } return; }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.style.cssText = 'position:fixed;left:8px;right:8px;top:calc(8px + env(safe-area-inset-top));z-index:2147483001;' +
+        'background:#9a5b00;color:#fff;border-radius:10px;padding:9px 34px 9px 12px;box-shadow:0 3px 12px rgba(0,0,0,.35);' +
+        'font:500 13px/1.35 system-ui,-apple-system,sans-serif';
+      var x = document.createElement('button');
+      x.textContent = '×';
+      x.setAttribute('aria-label', IT ? 'Chiudi' : 'Close');
+      x.style.cssText = 'position:absolute;right:4px;top:4px;width:28px;height:28px;border:0;background:none;color:#fff;font:600 18px/28px system-ui';
+      x.onclick = function () { barOff = true; staleBar(null); };
+      bar.appendChild(document.createElement('span'));
+      bar.appendChild(x);
+      document.body.appendChild(bar);
+    }
+    var lm = (s.lm || '?').replace(/\s*LT$/, '');
+    bar.firstChild.textContent = s.mode === 'auto'
+      ? (IT ? 'I dati potrebbero non essere aggiornati: dati del ' + lm + ', ultimo controllo ' + when(s.seen) + '. Collegati a internet o tocca ⇅.'
+            : 'The data may be out of date: data of ' + lm + ', last checked ' + when(s.seen) + '. Connect to the internet or tap ⇅.')
+      : (IT ? 'Dati del ' + lm + ': più di un giorno fa. Aggiorna i dati con ⇅.'
+            : 'Data of ' + lm + ': more than a day old. Update the data with ⇅.');
+  }
+
   var poll0 = poll;
-  poll = function (look) { return poll0(look).then(function (s) { if (s && s.mode === 'auto') showPend(s); return s; }); };
+  poll = function (look) {
+    return poll0(look).then(function (s) {
+      if (s && s.mode === 'auto') { showPend(s); autoPill(s); if (look) staleBar(s); }
+      return s;
+    });
+  };
 
   poll().then(function (s) {
     if (s && s.mode === 'auto') { setTimeout(function () { poll(true); }, 2000); return; }   // opened: look now
     if (!s || s.mode !== 'manual') return;
+    staleBar(s);
     var a = document.createElement('a'), old = s.age >= 24;
     a.href = './?manage=1';
     a.textContent = '⇅ ' + ageText(s.age);
@@ -120,9 +208,6 @@
     document.body.appendChild(a);
     /* the age stays readable for a few seconds, then the button shrinks to a small round arrow so that it covers less of
        the page (seen on an iPhone 27.11: it hid chart labels); the full text stays in its title and on the reader page */
-    setTimeout(function () {
-      a.textContent = '\u21c5';
-      a.style.padding = '0'; a.style.width = '32px'; a.style.textAlign = 'center'; a.style.opacity = '.85';
-    }, 6000);
+    shrink(a);
   });
 })();
