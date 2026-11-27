@@ -261,8 +261,8 @@
   }
   /* what is stored, without the data itself */
   function stateOf(ver) {
-    return Promise.all([get('cfg'), get('cur'), get('last'), get('seen')]).then(function (a) {
-      var cfg = a[0] || {}, cur = a[1] || {}, last = a[2] || {}, seen = a[3] || 0;
+    return Promise.all([get('cfg'), get('cur'), get('last'), get('seen'), phState()]).then(function (a) {
+      var cfg = a[0] || {}, cur = a[1] || {}, last = a[2] || {}, seen = a[3] || 0, ph = a[4];
       var pend = last.status === 'pending' && last.pend && last.pend.batch !== cur.batch ? last.pend : null;
       var age = cur.batch ? ageHours(cur) : -1;
       /* r18: not up to date? automatic mode: the source was not reached since new data may have come (the chain runs on
@@ -271,7 +271,7 @@
       var stale = !cur.batch ? false : cfg.src ? seen < lastSlot(Date.now()) : age >= 24;
       return { ver: ver || '', mode: cfg.src ? 'auto' : (cfg.k ? 'manual' : 'none'), name: cfg.n || '', dir: cfg.dir || '',
                batch: cur.batch || '', lm: cur.lm || '', size: cur.size || 0, at: cur.at || 0, from: cur.from || '', last: last,
-               age: age, pend: pend, auto: autoAllowed(), seen: seen, stale: stale };
+               age: age, pend: pend, auto: autoAllowed(), seen: seen, stale: stale, ph: ph };
     });
   }
   /* the newest moment new data may be waiting: a working day, 08:00, 10:00 ... 20:00, plus 90 minutes, not after now */
@@ -282,6 +282,147 @@
       if (wd >= 1 && wd <= 5 && h >= 8 && h <= 20 && h % 2 === 0 && t.getTime() + 90 * 60000 <= now) return t.getTime() + 90 * 60000;
     }
     return 0;
+  }
+
+  /* ---------------------------------------------------------------- r19: photos (CRM only, user 27.11.2026)
+     The same packs as the Live program (tools/defects_ws/photo_sync.py, <hull>_<nn>.pak, 50 defect numbers each):
+     MSCP1 | int32 index length | index lines "name offset length" | blobs, each blob one photo as MSCD1 (gzip + AES +
+     HMAC with the edition key). The reader downloads the list /data/<ed>/ph and the packs that changed, cuts them into
+     single photos and keeps them ENCRYPTED in its own cache (one entry per photo, "ph/<hull>/<nnnn>_<ii>"); a photo is
+     decrypted only when the page shows it. On a network without automatic downloads only the list is read. */
+  var PHC = 'msc-reader-ph:' + SCOPE;
+  function phKey(name) { return new Request(SCOPE + 'ph/' + name); }
+  function phPackOf(name) {                                         // 6322/0748_01 -> 6322_14.pak
+    var m = /^(\d{4})\/(\d{4})_\d+$/.exec(name);
+    if (!m) return '';
+    var n = Math.floor(parseInt(m[2], 10) / 50);
+    return m[1] + '_' + (n < 10 ? '0' : '') + n + '.pak';
+  }
+  function phSplit(buf) {                                           // pack -> [{name, blob bytes}]
+    var u = new Uint8Array(buf), out = [];
+    if (u.length < 9 || String.fromCharCode(u[0], u[1], u[2], u[3], u[4]) !== 'MSCP1') throw new Error('not a photo pack');
+    var n = new DataView(buf).getInt32(5, true);
+    if (n <= 0 || 9 + n > u.length) throw new Error('photo pack damaged');
+    var base = 9 + n;
+    new TextDecoder().decode(u.subarray(9, base)).split('\n').forEach(function (l) {
+      var f = l.split(' ');
+      if (f.length !== 3) return;
+      var off = base + parseInt(f[1], 10), len = parseInt(f[2], 10);
+      if (off + len <= u.length) out.push({ name: f[0], bytes: u.slice(off, off + len) });
+    });
+    return out;
+  }
+  function phFetch(base, cfg, path, opt) {
+    var src = new URL(cfg.src + '/ph' + (path ? '/' + path : ''), base);
+    return tokenOf(cfg.k).then(function (tok) {
+      var h = { 'X-Reader-Token': tok };
+      if (opt && opt.etag) h['If-None-Match'] = opt.etag;
+      return fetch(src, { method: opt && opt.head ? 'HEAD' : 'GET', cache: 'no-store', headers: h, credentials: 'same-origin' });
+    });
+  }
+  var phRunning = null;
+  /* one photo update: list, then the missing or changed packs (or, with opt.only, just that pack). Result
+     {status: 'none'|'same'|'new'|'pending'|'err', have, total, haveBytes, bytes, err}; never throws. */
+  function phSync(base, opt) {
+    if (phRunning && !(opt && opt.only)) return phRunning;
+    var run = Promise.all([get('cfg'), get('phlist'), get('phpacks')]).then(function (a) {
+      var cfg = a[0], list = a[1], local = a[2] || {};
+      if (!cfg || !cfg.src || cfg.st) return { status: 'none' };
+      return phFetch(base, cfg, '', { etag: list && list.etag }).then(function (r) {
+        if (r.status === 404) return put('phlist', null).then(function () { return null; });
+        if (r.status === 304) return list;
+        if (!r.ok) throw new Error('photo list HTTP ' + r.status);
+        var etag = r.headers.get('ETag') || '';
+        return r.json().then(function (j) { var l = { packs: j.packs || {}, etag: etag, at: Date.now() }; return put('phlist', l).then(function () { return l; }); });
+      }).then(function (l) {
+        if (!l) return { status: 'none' };
+        var names = Object.keys(l.packs).sort(), todo = names.filter(function (n) { return !local[n] || local[n].etag !== l.packs[n].etag; });
+        if (opt && opt.only) todo = todo.filter(function (n) { return n === opt.only; });
+        var bytes = 0, haveB = 0;
+        names.forEach(function (n) { bytes += l.packs[n].size; if (todo.indexOf(n) < 0) haveB += l.packs[n].size; });
+        var stats = function (st) { return { status: st, have: names.length - todo.length, total: names.length, haveBytes: haveB, bytes: bytes }; };
+        var gone = Object.keys(local).filter(function (n) { return !l.packs[n]; });
+        if (!todo.length && !gone.length) return stats('same');
+        if (todo.length && !(opt && opt.manual) && (!autoAllowed() || (opt && opt.allowed === false))) return stats('pending');
+        return caches.open(PHC).then(function (c) {
+          var step = Promise.all(gone.map(function (n) {                 // packs no longer listed: their photos go
+            return Promise.all((local[n].names || []).map(function (x) { return c.delete(phKey(x)); })).then(function () { delete local[n]; });
+          }));
+          todo.forEach(function (n, i) {
+            step = step.then(function () {
+              return phFetch(base, cfg, n).then(function (r) {
+                if (!r.ok) throw new Error('photo pack HTTP ' + r.status);
+                var size = l.packs[n].size;
+                if (BC) BC.postMessage({ t: 'phprog', pack: i + 1, packs: todo.length, got: haveB, bytes: bytes });
+                return readBodyPh(r, haveB, bytes);
+              }).then(function (buf) {
+                var items = phSplit(buf), old = local[n] && local[n].names || [];
+                return Promise.all(items.map(function (it) {
+                  return c.put(phKey(it.name), new Response(it.bytes, { headers: { 'Content-Type': 'application/octet-stream' } }));
+                })).then(function () {
+                  var now = items.map(function (it) { return it.name; });
+                  return Promise.all(old.filter(function (x) { return now.indexOf(x) < 0; }).map(function (x) { return c.delete(phKey(x)); })).then(function () {
+                    local[n] = { etag: l.packs[n].etag, names: now };
+                    haveB += l.packs[n].size;
+                    return put('phpacks', local);
+                  });
+                });
+              });
+            });
+          });
+          return step.then(function () {
+            if (BC) BC.postMessage({ t: 'phprog', done: true, got: haveB, bytes: bytes });
+            var r = stats('new'); r.have = names.filter(function (n) { return local[n] && local[n].etag === l.packs[n].etag; }).length; r.haveBytes = haveB;
+            return r;
+          });
+        });
+      });
+    }).then(function (r) {
+      if (BC) BC.postMessage({ t: 'phstate', status: r.status });          // the pages show the photo state at once
+      return r;
+    }, function (e) {
+      if (BC) BC.postMessage({ t: 'phprog', done: true, err: String(e && e.message || e) });
+      return { status: 'err', err: String(e && e.message || e) };
+    });
+    if (!(opt && opt.only)) { phRunning = run; run.then(function () { phRunning = null; }); }
+    return run;
+  }
+  /* body of a pack with progress over all photos ("got" counts the packs already here) */
+  function readBodyPh(r, before, all) {
+    if (!r.body || !r.body.getReader) return r.arrayBuffer();
+    var rd = r.body.getReader(), parts = [], got = 0, last = 0;
+    function more() {
+      return rd.read().then(function (x) {
+        if (x.done) {
+          var u = new Uint8Array(got), o = 0;
+          parts.forEach(function (p) { u.set(p, o); o += p.length; });
+          return u.buffer;
+        }
+        parts.push(x.value); got += x.value.length;
+        var now = Date.now();
+        if (BC && now - last > 300) { last = now; BC.postMessage({ t: 'phprog', got: before + got, bytes: all }); }
+        return more();
+      });
+    }
+    return more();
+  }
+  /* one photo for the page: decrypted from its cached blob; null when it is not on this device */
+  function phPhoto(name, k) {
+    return caches.open(PHC).then(function (c) { return c.match(phKey(name)); }).then(function (hit) {
+      if (!hit) return null;
+      return hit.arrayBuffer().then(function (buf) { return unpackGz(buf, k); }).then(function (gz) {
+        return new Response(gunzip(gz), { headers: { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' } });
+      });
+    });
+  }
+  function phState() {
+    return Promise.all([get('phlist'), get('phpacks')]).then(function (a) {
+      var l = a[0], local = a[1] || {};
+      if (!l || !l.packs) return null;
+      var names = Object.keys(l.packs), have = 0, haveB = 0, bytes = 0;
+      names.forEach(function (n) { bytes += l.packs[n].size; if (local[n] && local[n].etag === l.packs[n].etag) { have++; haveB += l.packs[n].size; } });
+      return { have: have, total: names.length, haveBytes: haveB, bytes: bytes };
+    });
   }
 
   /* age of the data: "lm" is the time of the data in Italy, "27.11.2026 08:00 LT" (the devices are in Italy too) */
@@ -297,5 +438,6 @@
   G.MSCR = { SCOPE: SCOPE, lmTime: lmTime, ageHours: ageHours, unpackGz: unpackGz, gunzip: gunzip, inspect: inspect, parseStampJs: parseStampJs, parseLink: parseLink,
              importFile: importFile, checkSource: checkSource, checkAndRecord: checkAndRecord, stateOf: stateOf,
              tokenOf: tokenOf, autoAllowed: autoAllowed, netType: netType, lastSlot: lastSlot,
+             PHC: PHC, phSync: phSync, phPhoto: phPhoto, phPackOf: phPackOf, phState: phState,
              get: get, put: put, del: del };
 })(self);

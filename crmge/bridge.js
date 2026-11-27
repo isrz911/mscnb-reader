@@ -115,7 +115,47 @@
   if (bc) bc.onmessage = function (e) {
     var m = e.data || {}, b = busy && (autoBtn || pendBtn);
     if (m.t === 'prog' && b && m.total) { b.style.width = ''; b.style.padding = '0 11px'; b.textContent = '⇣ ' + mbs(m.got) + ' / ' + mbs(m.total) + ' MB'; }
+    if (m.t === 'phprog') phProg(m);
+    if (m.t === 'phstate' && !phBusy) poll();
   };
+
+  /* r19: photos of Defects LOG (CRM). While the worker downloads the packs: "📷 120 / 566 MB" at the bottom left; on a
+     network without automatic downloads (Android on mobile data), while photos are missing: "📷 Photos · 444 MB", a tap
+     downloads them on this network. */
+  var phBtn = null, phBusy = false;
+  function phStyle(bg) { return pillStyle(bg).replace('right:10px', 'left:10px'); }
+  function phEl() {
+    if (!phBtn) { phBtn = document.createElement('button'); document.body.appendChild(phBtn); }
+    return phBtn;
+  }
+  function phProg(m) {
+    if (m.done) {
+      phBusy = false;
+      if (phBtn) { phBtn.textContent = m.err ? (IT ? '📷 Foto: errore' : '📷 Photos: error') : '📷 ✓'; setTimeout(function () { poll().then(phPill); }, 2500); }
+      return;
+    }
+    phBusy = true;
+    var b = phEl(); b.onclick = null; b.disabled = true;
+    b.style.cssText = phStyle('rgba(0,10,60,.80)');
+    b.textContent = '📷 ' + mbs(m.got || 0) + ' / ' + mbs(m.bytes || 0) + ' MB';
+  }
+  function phPill(s) {
+    /* the page decides where photos come from when it builds the Defects LOG sheet; the worker sets this flag at the start
+       of the page once the reader knows there are photos, here it is set for a sheet built later in this visit */
+    if (s && s.ph) window.__MSC_PH = 1;
+    if (phBusy) return;
+    var p = s && s.ph;
+    if (!p || p.have >= p.total) { if (phBtn) { phBtn.remove(); phBtn = null; } return; }
+    if (s.auto && netAllowed()) { if (phBtn) { phBtn.remove(); phBtn = null; } return; }   // they come by themselves
+    var b = phEl(); b.disabled = false;
+    b.style.cssText = phStyle('rgba(30,122,58,.95)');
+    b.textContent = '📷 ' + (IT ? 'Foto · ' : 'Photos · ') + mbs(p.bytes - p.haveBytes) + ' MB';
+    b.title = IT ? 'Tocca per scaricare le foto dei difetti' : 'Tap to download the photos of the defects';
+    b.onclick = function () {
+      phBusy = true; b.disabled = true; b.textContent = '📷 …';
+      fetch('state.json?ph=1&now=1&net=' + (netAllowed() ? 1 : 0), { cache: 'no-store' }).catch(function () { phBusy = false; });
+    };
+  }
   function shrink(el) {
     clearTimeout(small);
     small = setTimeout(function () {
@@ -190,7 +230,7 @@
   var poll0 = poll;
   poll = function (look) {
     return poll0(look).then(function (s) {
-      if (s && s.mode === 'auto') { showPend(s); autoPill(s); if (look) staleBar(s); }
+      if (s && s.mode === 'auto') { showPend(s); autoPill(s); phPill(s); if (look) staleBar(s); }
       return s;
     });
   };

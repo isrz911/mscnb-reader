@@ -411,11 +411,11 @@
   $('b-forget').onclick = function () {
     if (!confirm(T.forgetQ)) return;
     later(false);
-    Promise.all([MSCR.del('cur'), MSCR.del('cfg'), MSCR.del('last')]).then(function () {
+    Promise.all([MSCR.del('cur'), MSCR.del('cfg'), MSCR.del('last'), MSCR.del('seen'), MSCR.del('phlist'), MSCR.del('phpacks')]).then(function () {
       return navigator.serviceWorker && navigator.serviceWorker.getRegistration ? navigator.serviceWorker.getRegistration('./') : null;
     }).then(function (r) { return r ? r.unregister() : null; }).then(function () {
       var pre = 'msc-reader:' + MSCR.SCOPE + ':';
-      return caches && caches.keys ? caches.keys().then(function (ks) { return Promise.all(ks.filter(function (k) { return k.indexOf(pre) === 0; }).map(function (k) { return caches.delete(k); })); }) : null;
+      return caches && caches.keys ? caches.keys().then(function (ks) { return Promise.all(ks.filter(function (k) { return k.indexOf(pre) === 0 || k === MSCR.PHC; }).map(function (k) { return caches.delete(k); })); }) : null;
     }).then(function () { location.replace('./'); });
   };
   start();
