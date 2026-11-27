@@ -210,6 +210,20 @@
   });
   if (IT) document.documentElement.lang = 'it';
 
+  /* A new version of the reader shows at once (r14). The page comes from the phone's own copy; opening it makes the
+     browser look for a newer sw.js, which installs in the background and takes over (skipWaiting, clients.claim). This
+     page then reloads itself once, so the person sees the new version now and not at the next opening. Not on the
+     first visit (there was no worker before) and not on the data page (it is left as it is until it is opened again). */
+  var HAD_SW = !!(navigator.serviceWorker && navigator.serviceWorker.controller), reloading = false, busy = false;
+  if (HAD_SW) navigator.serviceWorker.addEventListener('controllerchange', function () {
+    if (reloading || busy) return;                            // not while a data file is being loaded
+    reloading = true; location.reload();
+  });
+  var LATER = 'msc-reader:' + MSCR.SCOPE + ':later';
+  function later(v) {                                         // "Later" on the Home Screen card, kept on this device
+    try { if (v === undefined) return localStorage.getItem(LATER) === '1'; if (v) localStorage.setItem(LATER, '1'); else localStorage.removeItem(LATER); } catch (e) { return false; }
+  }
+
   function sw() {
     if (!('serviceWorker' in navigator)) return Promise.reject(new Error(T.nosw));
     /* updateViaCache none: a new version of the reader (sw.js, reader-core.js) is seen at the next start */
@@ -313,8 +327,9 @@
       /* straight to the data, unless the person came here to update, or just opened the access link in a browser tab */
       if (cfg && cur && !Q.get('manage') && !Q.get('err') && !(fresh && !STANDALONE)) { location.replace('app'); return; }
       render();
-      /* the first time the access link is opened in Safari on this device: the Home Screen steps */
-      if (cfg && fresh && IOS && !STANDALONE) hintOpen();
+      /* the Home Screen steps in Safari: the first time the access link is opened on this device, and (r14) as long as
+         there is no data yet and the card was not put away with "Later" (a reload for a new version keeps it) */
+      if (cfg && IOS && !STANDALONE && (fresh || (!(cur && cur.dat) && !later()))) hintOpen();
     }).catch(function (e) { msg(T.start + e.message, 'err'); render(); });
   }
 
@@ -331,7 +346,7 @@
   };
   $('b-how').onclick = hintOpen;
   $('hs-pic').onclick = hintPics;
-  $('hs-close').onclick = function () { show('hs', false); };
+  $('hs-close').onclick = function () { show('hs', false); later(true); };
   $('hs').onclick = function (e) { if (e.target === $('hs')) show('hs', false); };
 
   $('b-save').onclick = function () {
@@ -351,7 +366,7 @@
   $('b-file').onclick = function () { $('f').value = ''; $('f').click(); };
   $('f').onchange = function () {
     var file = $('f').files && $('f').files[0]; if (!file) return;
-    msg(T.loading); prog(40);
+    msg(T.loading); prog(40); busy = true;
     file.arrayBuffer().then(function (buf) {
       return MSCR.inspect(buf, cfg.k).then(function (s) {
         /* the newest file is the one: an older download picked by mistake does not replace newer data */
@@ -360,15 +375,16 @@
         return MSCR.importFile(buf, cfg).then(function (rec) { return { rec: rec }; });
       });
     }).then(function (r) {
-      prog(null);
+      prog(null); busy = false;
       if (r.same) { msg(fill(T.same, { lm: r.same.lm }), 'ok'); return; }
       if (r.older) { msg(fill(T.older, { lm: cur.lm }), 'err'); return; }
       cur = r.rec; render(); msg(fill(T.loaded, { lm: r.rec.lm }), 'ok');
       setTimeout(function () { location.replace('app'); }, 600);
-    }).catch(function (e) { prog(null); msg(T.bad + e.message, 'err'); });
+    }).catch(function (e) { prog(null); busy = false; msg(T.bad + e.message, 'err'); });
   };
   $('b-forget').onclick = function () {
     if (!confirm(T.forgetQ)) return;
+    later(false);
     Promise.all([MSCR.del('cur'), MSCR.del('cfg'), MSCR.del('last')]).then(function () {
       return navigator.serviceWorker && navigator.serviceWorker.getRegistration ? navigator.serviceWorker.getRegistration('./') : null;
     }).then(function (r) { return r ? r.unregister() : null; }).then(function () {
