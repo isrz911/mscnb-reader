@@ -156,7 +156,9 @@
     loading: 'Apertura del file…', loaded: 'Dati del {lm} caricati.', bad: 'File non accettato: ', older: 'Questo file è più vecchio dei dati che hai già ({lm}): non caricato.',
     same: 'Hai già questi dati ({lm}).', start: 'Impossibile avviare: ', stored: 'Impossibile aprire i dati salvati: ', link: 'Link di accesso non valido: ',
     nosw: 'questo browser non può conservare l’app (finestra privata?)', dl: 'Download dei dati…', dlErr: 'Download non riuscito: ',
-    upToDate: 'I dati sono aggiornati.', newer: 'Nuovi dati salvati: '
+    upToDate: 'I dati sono aggiornati.', newer: 'Nuovi dati salvati: ',
+    getNow: 'Scarica i dati ora', getNowMb: 'Scarica i dati ora ({mb} MB)', pendMb: 'Scarica i nuovi dati ({mb} MB)',
+    mobile: 'Rete mobile: i dati si scaricano solo quando tocchi il pulsante. Con il Wi‑Fi arrivano da soli.'
   } : {
     sub: 'Data reader', setup: 'Open the access link you received (e-mail or QR code), or paste it here.', save: 'Save',
     when: 'Data of ', none: 'No data on this device yet: do steps 1 and 2 below.', open: 'Open',
@@ -179,11 +181,13 @@
     loading: 'Opening the file…', loaded: 'Data of {lm} loaded.', bad: 'This file was not accepted: ', older: 'This file is older than the data you already have ({lm}): not loaded.',
     same: 'You already have this data ({lm}).', start: 'The reader could not start: ', stored: 'The stored data could not be opened: ', link: 'Access link not accepted: ',
     nosw: 'this browser cannot keep the app (private window?)', dl: 'Downloading data…', dlErr: 'Download failed: ',
-    upToDate: 'The data is up to date.', newer: 'New data stored: '
+    upToDate: 'The data is up to date.', newer: 'New data stored: ',
+    getNow: 'Download the data now', getNowMb: 'Download the data now ({mb} MB)', pendMb: 'Download the new data ({mb} MB)',
+    mobile: 'Mobile network: data is downloaded only when you tap the button. On Wi‑Fi it comes by itself.'
   };
   var Q = new URLSearchParams(location.search);
   var STANDALONE = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
-  var cfg = null, cur = null, fresh = false;
+  var cfg = null, cur = null, fresh = false, pend = null;   // pend (r17): new data waiting for a tap, {batch, lm, size}
 
   /* "Put it on the Home Screen" (r13). iPhone: Safari never lets a page add its icon, so a card with the steps (and real
      Safari screens, help/ios1-5.jpg, iOS 27.2) comes up the first time the access link is opened. Since iOS 26 Share sits
@@ -231,7 +235,11 @@
     return navigator.serviceWorker.register('sw.js', { scope: './', updateViaCache: 'none' }).then(function () { return navigator.serviceWorker.ready; });
   }
   function load() {
-    return Promise.all([MSCR.get('cfg'), MSCR.get('cur')]).then(function (a) { cfg = a[0] || null; cur = a[1] || null; });
+    return Promise.all([MSCR.get('cfg'), MSCR.get('cur'), MSCR.get('last')]).then(function (a) {
+      cfg = a[0] || null; cur = a[1] || null;
+      var l = a[2];
+      pend = l && l.status === 'pending' && l.pend && (!cur || l.pend.batch !== cur.batch) ? l.pend : null;
+    });
   }
 
   function instUI() {
@@ -292,6 +300,12 @@
     if (get) $('b-get').href = get; else $('b-get').removeAttribute('href');
     $('b-get').setAttribute('aria-disabled', get ? 'false' : 'true');
     show('b-check', !!cfg.src);
+    /* r17: on a network without automatic downloads (Android on mobile data) the button says what it will download */
+    var mb = function (n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0); };
+    $('b-check').textContent = !has ? (pend && pend.size ? fill(T.getNowMb, { mb: mb(pend.size) }) : T.getNow)
+      : pend && pend.size ? fill(T.pendMb, { mb: mb(pend.size) }) : T.check;
+    $('b-check').classList.toggle('main', !has || !!pend);
+    if (cfg.src && !MSCR.autoAllowed() && !$('msg').textContent) msg(T.mobile);
     show('t-ios', navigator.standalone === true && !cfg.src);
   }
 
@@ -320,9 +334,10 @@
     }, function (e) { msg(T.link + e.message, 'err'); });
     return step.then(sw).then(load).then(function () {
       if (Q.get('err')) msg(T.stored + Q.get('err'), 'err');
-      if (cfg && !cur && cfg.src) {          // automatic mode, first data
-        msg(T.dl); prog(10);
-        return MSCR.checkAndRecord(location.href).then(function (r) { prog(null); if (!r) return MSCR.get('last').then(function (l) { msg(T.dlErr + (l && l.err || ''), 'err'); }); msg(''); }).then(load);
+      if (cfg && !cur && cfg.src) {          // automatic mode, first data (r17: on mobile data only a look, the tap downloads)
+        var autoNet = MSCR.autoAllowed();
+        if (autoNet) { msg(T.dl); prog(10); }
+        return MSCR.checkAndRecord(location.href).then(function (r) { prog(null); if (!r) return MSCR.get('last').then(function (l) { msg(T.dlErr + (l && l.err || ''), 'err'); }); if (autoNet) msg(''); }).then(load);
       }
     }).then(function () {
       /* straight to the data, unless the person came here to update, or just opened the access link in a browser tab */
@@ -355,7 +370,7 @@
   };
   $('b-check').onclick = function () {
     msg(T.dl); prog(30);
-    MSCR.checkAndRecord(location.href).then(function (r) {
+    MSCR.checkAndRecord(location.href, { manual: true }).then(function (r) {
       prog(null);
       return load().then(function () {
         render();

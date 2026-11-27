@@ -11,13 +11,19 @@
    - state.json: what is stored, for bridge.js. */
 importScripts('reader-core.js');
 
-var VER = 'r16';
+var VER = 'r17';
 var PREFIX = 'msc-reader:' + MSCR.SCOPE + ':';
 var SHELL = PREFIX + VER;
 var FILES = ['./', 'reader-core.js', 'bridge.js', 'reader.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 var SCOPE = new URL(self.registration.scope);
 
 self.addEventListener('install', function (e) {
+  /* r17: a NEW version of the reader waits for a network where automatic downloads are allowed (on an Android phone on
+     a mobile network: until Wi-Fi). The browser asks again at the next opening; the first installation is never held. */
+  if (self.registration.active && (!MSCR.autoAllowed() || pageNet === false)) {
+    e.waitUntil(Promise.reject(new Error('reader update waits for Wi-Fi')));
+    return;
+  }
   e.waitUntil(caches.open(SHELL).then(function (c) {
     return c.addAll(FILES.map(function (f) { return new Request(f, { cache: 'reload' }); }));   // past the HTTP cache
   }).then(function () { return self.skipWaiting(); }));
@@ -33,15 +39,19 @@ self.addEventListener('activate', function (e) {
    screen or the network comes back (not more than once a minute); the page's own stamp request every 5 minutes leads to a
    check at most every 30 minutes. A check is one small request; the file is downloaded only when it is new. */
 var checking = null, lastCheck = 0;
+/* r17: what the open page says about the network (state.json?net=0|1); a worker may not see the network type itself */
+var pageNet = null;
 var EVERY = 30 * 60 * 1000, MIN_GAP = 60 * 1000;
-function check(force) {
-  if (checking) return checking;
-  if (Date.now() - lastCheck < (force ? MIN_GAP : EVERY)) return Promise.resolve(null);
+/* manual (r17): the person tapped "download": on any network, without waiting for the gaps */
+function check(force, manual) {
+  if (checking && !manual) return checking;
+  if (!manual && Date.now() - lastCheck < (force ? MIN_GAP : EVERY)) return Promise.resolve(null);
   lastCheck = Date.now();
-  checking = MSCR.get('cfg').then(function (cfg) {
-    return cfg && cfg.src ? MSCR.checkAndRecord(SCOPE.href) : null;      // manual mode: nothing to look for
-  }).then(function (r) { checking = null; return r; }, function () { checking = null; return null; });
-  return checking;
+  var run = MSCR.get('cfg').then(function (cfg) {
+    return cfg && cfg.src ? MSCR.checkAndRecord(SCOPE.href, { manual: !!manual, allowed: pageNet === false ? false : undefined }) : null;
+  }).then(function (r) { if (checking === run) checking = null; return r; }, function () { if (checking === run) checking = null; return null; });
+  checking = run;
+  return run;
 }
 
 function appendTail(text) {
@@ -70,8 +80,19 @@ function serveStamp() {
   });
 }
 
-function serveState(force) {
-  return (force ? check(true) : Promise.resolve(null)).then(function () { return MSCR.stateOf(VER); }).then(function (s) {
+/* r17: the access link as stored (local only, never from the network): the data page puts it into its own address on
+   an iPhone, so that "Add to Home Screen" from the data page carries the key (a Home Screen web app has storage of its
+   own and would otherwise ask for the link) */
+function serveLink() {
+  return MSCR.get('cfg').then(function (cfg) {
+    var o = {};
+    if (cfg) ['k', 'src', 'f', 'n'].forEach(function (x) { if (cfg[x]) o[x] = cfg[x]; });
+    return new Response(JSON.stringify(o), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  });
+}
+
+function serveState(force, manual) {
+  return (force || manual ? check(true, manual) : Promise.resolve(null)).then(function () { return MSCR.stateOf(VER); }).then(function (s) {
     return new Response(JSON.stringify(s), { headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
   });
 }
@@ -95,7 +116,12 @@ self.addEventListener('fetch', function (e) {
   var rel = u.pathname.slice(SCOPE.pathname.length);
   if (rel === 'app' || rel === 'app.html') { e.respondWith(serveApp()); e.waitUntil(ensureShell()); return; }
   if (rel === 'app.stamp.js') { e.respondWith(serveStamp()); return; }
-  if (rel === 'state.json') { e.respondWith(serveState(u.searchParams.get('check') === '1')); return; }
+  if (rel === 'link.json') { e.respondWith(serveLink()); return; }
+  if (rel === 'state.json') {
+    if (u.searchParams.has('net')) pageNet = u.searchParams.get('net') === '1';
+    e.respondWith(serveState(u.searchParams.get('check') === '1', u.searchParams.get('now') === '1'));
+    return;
+  }
   if (rel === '' || rel === 'index.html' || FILES.indexOf(rel) >= 0) {
     var key = rel === '' || rel === 'index.html' ? './' : rel;
     e.respondWith(caches.open(SHELL).then(function (c) {

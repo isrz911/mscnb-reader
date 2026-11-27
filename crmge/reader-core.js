@@ -108,7 +108,8 @@
   /* ---------------------------------------------------------------- the access link
      #k=<key, base64url>&f=<link that downloads the .dat from MSC OneDrive>&dir=<link to its folder>&n=<name>
      (manual mode: the person downloads the file with their own sign-in and loads it here), or
-     #k=...&src=<data file URL>&st=<stamp URL> (automatic mode, for later).
+     #k=...&src=/data/<edition>&f=... (automatic mode, r17: the encrypted file on the reader's own host, Cloudflare; the
+     OneDrive link stays as the other way), or #k=...&src=<any URL>&st=<stamp URL> (older test form).
      Everything after # stays in the browser: it is never sent to any server. */
   function parseLink(s) {
     s = String(s || '').trim();
@@ -130,11 +131,70 @@
     });
   }
 
-  /* automatic mode: look for a newer data file. Result {status: 'manual'|'same'|'new'|'older', batch, lm}; throws on
-     network errors and on files that do not decrypt (then the stored copy stays). base = URL the links are relative to. */
-  function checkSource(base, cfg, cur) {
+  /* r17: the data file on the reader's own host (/data/<edition>, Cloudflare) is given only to a reader that has the key:
+     X-Reader-Token = base64url(HMAC-SHA256(key, "mscnb-data-v1")). The key itself never leaves the device. */
+  var tokens = {};
+  function tokenOf(k) {
+    if (tokens[k]) return Promise.resolve(tokens[k]);
+    var m;
+    try { m = keyBytes(k); } catch (e) { return Promise.reject(e); }
+    return crypto.subtle.importKey('raw', m, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']).then(function (hk) {
+      return crypto.subtle.sign('HMAC', hk, TE.encode('mscnb-data-v1'));
+    }).then(function (sig) {
+      var u = new Uint8Array(sig), s = '';
+      for (var i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+      return (tokens[k] = btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''));
+    });
+  }
+
+  /* r17, the user's rule (27.11.2026): service phones (Android) have little mobile data, so on a mobile network nothing
+     is downloaded by itself, only on a tap; on Wi-Fi all by itself. iPhones are private phones without such limits:
+     automatic always. Browsers that do not tell the network (iPhone, most computers) count as "allowed", except Android. */
+  function netType() {
+    var c = self.navigator && self.navigator.connection;
+    return c ? { type: c.type || '', save: !!c.saveData } : { type: '', save: false };
+  }
+  function autoAllowed() {
+    var n = netType(), t = n.type, android = /Android/i.test((self.navigator && self.navigator.userAgent) || '');
+    if (n.save) return false;                                       // the person asked the phone to save data
+    if (t === 'wifi' || t === 'ethernet') return true;
+    if (t === 'cellular' || t === 'bluetooth' || t === 'wimax') return false;
+    return !android;
+  }
+
+  /* automatic mode: look for a newer data file. Result {status: 'manual'|'same'|'new'|'pending', batch, lm, size};
+     throws on network errors and on files that do not decrypt (then the stored copy stays). base = URL the links are
+     relative to. opt.manual: the person asked (download on any network); otherwise on a network where automatic
+     downloads are not allowed only a HEAD request (a few hundred bytes) says whether there is something new: 'pending'. */
+  function checkSource(base, cfg, cur, opt) {
     if (!cfg || !cfg.src) return Promise.resolve({ status: 'manual' });
     var src = new URL(cfg.src, base), same = src.origin === new URL(base).origin;
+    /* opt.allowed: the page's own view of the network (a worker may not see it); either "no" means only a look */
+    var probe = !(opt && opt.manual) && (!autoAllowed() || (opt && opt.allowed === false));
+    if (same && !cfg.st) return tokenOf(cfg.k).then(function (tok) {
+      var h = { 'X-Reader-Token': tok }, cond = cur && cur.src === src.href;
+      if (cond && cur.etag) h['If-None-Match'] = cur.etag;
+      return fetch(src, { method: probe ? 'HEAD' : 'GET', cache: 'no-store', headers: h, credentials: 'same-origin' }).then(function (r) {
+        if (r.status === 304) return { status: 'same', batch: cur.batch, lm: cur.lm };
+        if (!r.ok) throw new Error('data HTTP ' + r.status);
+        var etag = r.headers.get('ETag') || '', lastmod = r.headers.get('Last-Modified') || '';
+        var hb = r.headers.get('X-Batch') || '', hl = r.headers.get('X-LM') || '', hs = +(r.headers.get('X-Size') || 0);
+        if (cur && hb && hb === cur.batch) {                 // same snapshot under a new address: nothing to download
+          if (!probe) r.body && r.body.cancel && r.body.cancel().catch(function () {});
+          cur.etag = etag; cur.lastmod = lastmod; cur.src = src.href;
+          return put('cur', cur).then(function () { return { status: 'same', batch: cur.batch, lm: cur.lm }; });
+        }
+        if (probe) return { status: 'pending', batch: hb, lm: hl, size: hs };
+        return r.arrayBuffer().then(function (buf) {
+          return inspect(buf, cfg.k).then(function (st) {
+            var rec = { dat: buf, batch: st.batch, lm: st.lm, size: buf.byteLength, at: Date.now(), from: 'net',
+                        etag: etag, lastmod: lastmod, src: src.href };
+            return put('cur', rec).then(function () { return { status: 'new', batch: st.batch, lm: st.lm }; });
+          });
+        });
+      });
+    });
+    /* older form (any host, with a separate stamp file): kept for tests */
     var step = Promise.resolve(null);
     if (cfg.st) step = fetch(new URL(cfg.st, base), { cache: 'no-store', credentials: same ? 'same-origin' : 'omit' })
       .then(function (r) { if (!r.ok) throw new Error('stamp HTTP ' + r.status); return r.text(); })
@@ -165,10 +225,13 @@
     });
   }
 
-  /* one check with its result kept in "last" (shown on the reader page); never throws */
-  function checkAndRecord(base) {
-    return Promise.all([get('cfg'), get('cur')]).then(function (a) { return checkSource(base, a[0], a[1]); }).then(function (r) {
-      return put('last', { at: Date.now(), status: r.status, err: '' }).then(function () { return r; });
+  /* one check with its result kept in "last" (shown on the reader page); never throws. "pending" (new data waits for a
+     tap on a mobile network) keeps its size and stamp, so that the pages can offer it. */
+  function checkAndRecord(base, opt) {
+    return Promise.all([get('cfg'), get('cur')]).then(function (a) { return checkSource(base, a[0], a[1], opt); }).then(function (r) {
+      var l = { at: Date.now(), status: r.status, err: '' };
+      if (r.status === 'pending') l.pend = { batch: r.batch || '', lm: r.lm || '', size: r.size || 0 };
+      return put('last', l).then(function () { return r; });
     }, function (e) {
       return put('last', { at: Date.now(), status: 'err', err: String(e && e.message || e) }).then(function () { return null; });
     });
@@ -177,9 +240,10 @@
   function stateOf(ver) {
     return Promise.all([get('cfg'), get('cur'), get('last')]).then(function (a) {
       var cfg = a[0] || {}, cur = a[1] || {}, last = a[2] || {};
+      var pend = last.status === 'pending' && last.pend && last.pend.batch !== cur.batch ? last.pend : null;
       return { ver: ver || '', mode: cfg.src ? 'auto' : (cfg.k ? 'manual' : 'none'), name: cfg.n || '', dir: cfg.dir || '',
                batch: cur.batch || '', lm: cur.lm || '', size: cur.size || 0, at: cur.at || 0, from: cur.from || '', last: last,
-               age: cur.batch ? ageHours(cur) : -1 };
+               age: cur.batch ? ageHours(cur) : -1, pend: pend, auto: autoAllowed() };
     });
   }
 
@@ -195,5 +259,6 @@
 
   G.MSCR = { SCOPE: SCOPE, lmTime: lmTime, ageHours: ageHours, unpackGz: unpackGz, gunzip: gunzip, inspect: inspect, parseStampJs: parseStampJs, parseLink: parseLink,
              importFile: importFile, checkSource: checkSource, checkAndRecord: checkAndRecord, stateOf: stateOf,
+             tokenOf: tokenOf, autoAllowed: autoAllowed, netType: netType,
              get: get, put: put, del: del };
 })(self);

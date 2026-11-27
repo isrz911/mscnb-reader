@@ -28,6 +28,15 @@
     add('meta', { name: 'apple-mobile-web-app-title', content: 'Deck Map' });
     add('meta', { name: 'application-name', content: 'Deck Map' });
     if (!ios) add('link', { rel: 'manifest', href: 'reader.webmanifest' });
+    /* r17: on an iPhone, in a Safari tab, the address of this page gets the access link (#k=...), so that an icon added
+       from here works also as a Home Screen web app (which has storage of its own). Nothing goes to the network: the
+       part after # stays in the browser. */
+    var standalone = navigator.standalone === true || (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+    if (ios && !standalone && !location.hash) {
+      fetch('link.json', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (o) {
+        if (o && o.k && !location.hash) history.replaceState(history.state, '', location.pathname + location.search + '#' + new URLSearchParams(o).toString());
+      }).catch(function () {});
+    }
   })();
   var shown = '';
   try {
@@ -42,8 +51,16 @@
      (it does so at most once a minute): when the page opens, comes back on screen, or the network comes back, so a
      phone that was offline or closed at the time of a new snapshot gets it at once, without waiting for any schedule. */
   var mode = '';
+  /* r17: may data download by itself on this network? The same rule as reader-core.js autoAllowed(), told to the worker */
+  function netAllowed() {
+    var c = navigator.connection, t = c && c.type || '';
+    if (c && c.saveData) return false;
+    if (t === 'wifi' || t === 'ethernet') return true;
+    if (t === 'cellular' || t === 'bluetooth' || t === 'wimax') return false;
+    return !/Android/i.test(navigator.userAgent);
+  }
   function poll(look) {
-    return fetch('state.json' + (look && mode === 'auto' ? '?check=1' : ''), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (s) {
+    return fetch('state.json?net=' + (netAllowed() ? 1 : 0) + (look && mode === 'auto' ? '&check=1' : ''), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (s) {
       mode = s.mode; if (s.batch) latest = s.batch; return s;
     }).catch(function () { return null; });
   }
@@ -54,11 +71,43 @@
     else if (!document.hidden) poll(true).then(applyIfIdle);
   });
   window.addEventListener('online', function () { setTimeout(function () { poll(true).then(applyIfIdle); }, 3000); });
+  if (navigator.connection && navigator.connection.addEventListener)        // r17: Wi-Fi again -> look at once
+    navigator.connection.addEventListener('change', function () { if (netAllowed()) setTimeout(function () { poll(true).then(applyIfIdle); }, 3000); });
   setInterval(function () {
     poll().then(function () { if (newer() && (document.hidden || Date.now() - lastInput > 60000)) location.reload(); });
   }, 30000);
 
   function ageText(h) { return h < 0 ? '' : h < 1 ? '<1 h' : h < 48 ? Math.floor(h) + ' h' : Math.floor(h / 24) + (IT ? ' g' : ' d'); }
+  function pillStyle(bg) {
+    return 'position:fixed;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:2147483000;height:32px;' +
+      'padding:0 11px;border-radius:16px;background:' + bg + ';color:#fff;border:0;' +
+      'font:600 13px/32px system-ui,-apple-system,sans-serif;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);white-space:nowrap';
+  }
+
+  /* r17, automatic mode on a network where nothing downloads by itself (an Android phone on mobile data): new data is
+     only announced, with its size; one tap downloads it on this network and opens it */
+  var pendBtn = null;
+  function showPend(s) {
+    if (!s || !s.pend || !s.pend.size) { if (pendBtn) { pendBtn.remove(); pendBtn = null; } return; }
+    var mb = (s.pend.size / 1048576).toFixed(s.pend.size < 10485760 ? 1 : 0);
+    if (!pendBtn) {
+      pendBtn = document.createElement('button');
+      pendBtn.style.cssText = pillStyle('rgba(30,122,58,.95)');
+      pendBtn.onclick = function () {
+        pendBtn.disabled = true; pendBtn.textContent = IT ? 'Download…' : 'Downloading…';
+        fetch('state.json?now=1&net=' + (netAllowed() ? 1 : 0), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (n) {
+          if (n && n.batch && n.batch !== shown) { location.reload(); return; }
+          pendBtn.disabled = false; showPend(n);
+        }).catch(function () { pendBtn.disabled = false; pendBtn.textContent = IT ? 'Riprova' : 'Try again'; });
+      };
+      document.body.appendChild(pendBtn);
+    }
+    pendBtn.textContent = '⇣ ' + (IT ? 'Nuovi dati · ' : 'New data · ') + mb + ' MB';
+    pendBtn.title = (IT ? 'Dati del ' : 'Data of ') + (s.pend.lm || '?') + (IT ? '. Tocca per scaricare' : '. Tap to download');
+  }
+  var poll0 = poll;
+  poll = function (look) { return poll0(look).then(function (s) { if (s && s.mode === 'auto') showPend(s); return s; }); };
+
   poll().then(function (s) {
     if (s && s.mode === 'auto') { setTimeout(function () { poll(true); }, 2000); return; }   // opened: look now
     if (!s || s.mode !== 'manual') return;
@@ -67,9 +116,7 @@
     a.textContent = '⇅ ' + ageText(s.age);
     a.title = (IT ? 'Dati del ' : 'Data of ') + (s.lm || '?') + (IT ? '. Aggiorna i dati' : '. Update the data');
     a.setAttribute('aria-label', a.title);
-    a.style.cssText = 'position:fixed;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:2147483000;height:32px;' +
-      'padding:0 11px;border-radius:16px;background:' + (old ? 'rgba(154,91,0,.92)' : 'rgba(0,10,60,.80)') + ';color:#fff;' +
-      'font:600 13px/32px system-ui,-apple-system,sans-serif;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);white-space:nowrap';
+    a.style.cssText = pillStyle(old ? 'rgba(154,91,0,.92)' : 'rgba(0,10,60,.80)');
     document.body.appendChild(a);
     /* the age stays readable for a few seconds, then the button shrinks to a small round arrow so that it covers less of
        the page (seen on an iPhone 27.11: it hid chart labels); the full text stays in its title and on the reader page */
