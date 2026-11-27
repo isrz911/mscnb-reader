@@ -20,8 +20,9 @@
   document.head.appendChild(m);
 })();
 </script>
-<link rel="apple-touch-icon" href="icon-180.png">
-<link rel="icon" href="icon-192.png">
+<!-- ?v=: the icon address changes with the picture (r15), so that an iPhone never takes an old icon it kept -->
+<link rel="apple-touch-icon" href="icon-180.png?v=4bebdb09">
+<link rel="icon" href="icon-192.png?v=4bebdb09">
 <title>MSC Deck Map</title>
 <!-- Data reader (crm_ge/webreader/README.md): opens the encrypted guest data file (.dat) in the browser, no installation.
      The person downloads the newest .dat from the MSC OneDrive folder with their own sign-in and loads it here. -->
@@ -84,7 +85,7 @@
 </style>
 </head>
 <body>
-<header><img src="icon-192.png" alt=""><div><b id="h-name">MSC Deck Map</b><span id="h-sub">Data reader</span></div></header>
+<header><img src="icon-192.png?v=4bebdb09" alt=""><div><b id="h-name">MSC Deck Map</b><span id="h-sub">Data reader</span></div></header>
 <main>
   <div class="card hide" id="c-msg"><p id="msg"></p><div id="prog" class="hide"><i></i></div></div>
 
@@ -119,7 +120,7 @@
 </main>
 <div id="hs" class="hide" role="dialog" aria-modal="true" aria-labelledby="hs-t">
   <div class="sh">
-    <div class="sh-h"><img src="icon-192.png" alt=""><div><b id="hs-t"></b><span class="mut" id="hs-s"></span></div></div>
+    <div class="sh-h"><img src="icon-192.png?v=4bebdb09" alt=""><div><b id="hs-t"></b><span class="mut" id="hs-s"></span></div></div>
     <ol id="hs-steps"></ol>
     <div id="hs-pics" class="hide"></div>
     <p class="mut" id="hs-note"></p>
