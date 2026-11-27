@@ -1,6 +1,6 @@
 {
- "name": "MSC CRM GE",
- "short_name": "CRM GE",
+ "name": "CRM MSC GE",
+ "short_name": "CRM MSC",
  "scope": "./",
  "display": "standalone",
  "background_color": "#F4F2EE",

@@ -11,7 +11,7 @@
    - state.json: what is stored, for bridge.js. */
 importScripts('reader-core.js');
 
-var VER = 'r11';
+var VER = 'r12';
 var PREFIX = 'msc-reader:' + MSCR.SCOPE + ':';
 var SHELL = PREFIX + VER;
 var FILES = ['./', 'reader-core.js', 'bridge.js', 'reader.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
