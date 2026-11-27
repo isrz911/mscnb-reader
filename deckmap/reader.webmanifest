@@ -1,6 +1,8 @@
 {
  "name": "MSC Deck Map",
  "short_name": "Deck Map",
+ "id": "./",
+ "start_url": "./",
  "scope": "./",
  "display": "standalone",
  "background_color": "#F4F2EE",

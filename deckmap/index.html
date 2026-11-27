@@ -8,7 +8,18 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Deck Map">
-<link rel="manifest" href="reader.webmanifest">
+<script>
+/* The manifest only for browsers that are not on iPhone or iPad (r13). Its start_url "./" is there for Chrome: an
+   installed app must never carry the address with the key. On an iPhone it would make a Home Screen web app open
+   without the key; without a manifest Safari keeps the page address. Added from script, so that Safari (which reads a
+   manifest link as soon as it sees it) never gets it. */
+(function () {
+  var ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return;
+  var m = document.createElement('link'); m.rel = 'manifest'; m.href = 'reader.webmanifest';
+  document.head.appendChild(m);
+})();
+</script>
 <link rel="apple-touch-icon" href="icon-180.png">
 <link rel="icon" href="icon-192.png">
 <title>MSC Deck Map</title>
@@ -42,6 +53,34 @@
   #prog i { display: block; height: 100%; width: 0; background: var(--bronze); transition: width .2s; }
   .foot { text-align: center; margin-top: 18px; }
   .foot button { background: none; border: 0; color: var(--mut); font: inherit; font-size: 13px; text-decoration: underline; cursor: pointer; }
+  /* "put it on the Home Screen" (r13): a card over the page on iPhone, an Install button where the browser offers one */
+  #c-install.attn { box-shadow: 0 0 0 2px #EAB308, 0 1px 4px rgba(0,10,60,.08); }
+  #hs { position: fixed; inset: 0; z-index: 20; background: rgba(0,10,60,.32); display: flex; align-items: flex-end; justify-content: center; }
+  #hs.hide { display: none; }
+  #hs .sh { position: relative; background: #fff; width: calc(100% - 20px); max-width: 520px; max-height: calc(100% - 40px); overflow: auto;
+    margin: 0 0 calc(34px + env(safe-area-inset-bottom)); border-radius: 18px; padding: 14px 14px 12px; box-shadow: 0 8px 28px rgba(0,0,0,.35); }
+  .sh-h { display: flex; gap: 10px; align-items: center; margin-bottom: 4px; }
+  .sh-h img { width: 44px; height: 44px; border-radius: 10px; flex: none; }
+  .sh-h b { display: block; font-size: 17px; line-height: 1.25; }
+  .sh-h span { font-size: 13px; }
+  #hs-steps { list-style: none; margin: 6px 0 0; padding: 0; }
+  #hs-steps li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid #eee; font-size: 15px; line-height: 1.3; }
+  #hs-steps .n { flex: none; width: 22px; height: 22px; border-radius: 11px; background: var(--bronze); color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+  #hs-steps .ic { flex: none; width: 36px; display: flex; justify-content: center; }
+  #hs-note { font-size: 13px; margin: 4px 0 0; }
+  .sh-b { display: flex; gap: 8px; } .sh-b .btn { margin-top: 10px; padding: 12px 10px; font-size: 15px; }
+  #hs-pics { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding: 8px 2px 4px; margin-top: 4px; }
+  #hs-pics.hide { display: none; }
+  #hs-pics figure { flex: none; width: 62%; max-width: 240px; margin: 0; scroll-snap-align: center; }
+  #hs-pics .pic { position: relative; border-radius: 16px; overflow: hidden; box-shadow: 0 0 0 1px #ddd; background: #f4f4f4; aspect-ratio: 1320 / 2868; }
+  #hs-pics img { display: block; width: 100%; height: 100%; }
+  #hs-pics figcaption { font-size: 13px; text-align: center; margin-top: 6px; line-height: 1.3; }
+  .mk { position: absolute; border: 3px solid #EAB308; border-radius: 9px; box-shadow: 0 0 0 3px rgba(234,179,8,.3); }
+  .mk.ring { width: 17%; aspect-ratio: 1; height: auto; border-radius: 50%; transform: translate(-50%, -50%); }
+  #hs-arrow { position: absolute; left: 26%; bottom: calc(6px + env(safe-area-inset-bottom)); width: 0; height: 0; margin-left: -12px;
+    border-left: 12px solid transparent; border-right: 12px solid transparent; border-top: 20px solid #EAB308; animation: bob 1s ease-in-out infinite; }
+  #hs-arrow.hide { display: none; }
+  @keyframes bob { 50% { transform: translateY(6px); } }
 </style>
 </head>
 <body>
@@ -73,10 +112,21 @@
     <button class="btn hide" id="b-check"></button>
   </div>
 
-  <div class="card hide" id="c-install"><h2 id="t-inst-h"></h2><p class="mut" id="t-inst"></p></div>
+  <div class="card hide" id="c-install"><h2 id="t-inst-h"></h2><p class="mut" id="t-inst"></p>
+    <button class="btn main hide" id="b-inst"></button><button class="btn hide" id="b-how"></button></div>
 
   <div class="foot hide" id="c-forget"><button id="b-forget"></button></div>
 </main>
+<div id="hs" class="hide" role="dialog" aria-modal="true" aria-labelledby="hs-t">
+  <div class="sh">
+    <div class="sh-h"><img src="icon-192.png" alt=""><div><b id="hs-t"></b><span class="mut" id="hs-s"></span></div></div>
+    <ol id="hs-steps"></ol>
+    <div id="hs-pics" class="hide"></div>
+    <p class="mut" id="hs-note"></p>
+    <div class="sh-b"><button class="btn main" id="hs-pic"></button><button class="btn" id="hs-close"></button></div>
+  </div>
+  <div id="hs-arrow" class="hide"></div>
+</div>
 <script src="reader-core.js"></script>
 <script>
 (function () {
@@ -90,7 +140,16 @@
     upd: 'Aggiorna i dati', get: 'Scarica il nuovo file dati', file: 'Carica il file scaricato',
     hint: 'Nuovi dati ogni 2 ore nei giorni lavorativi. Il passo 1 apre il file su OneDrive MSC: se richiesto, accedi con il tuo account aziendale; il file va in Download (dopo l’accesso la pagina può restare bianca: il file si sta scaricando, freccia blu nella barra degli indirizzi). Poi torna qui e al passo 2 scegli il file .dat più recente.',
     check: 'Cerca nuovi dati', instH: 'Usala come un’app',
-    inst: 'iPhone: Safari → Condividi → Aggiungi alla schermata Home → disattiva “Apri come app web” → Aggiungi. Android: menu ⋮ → Aggiungi a schermata Home. I dati restano disponibili anche senza rete.',
+    inst: 'iPhone: Safari → ☰ accanto all’indirizzo → Condividi → Aggiungi alla schermata Home → disattiva “Apri come app web” → Aggiungi. Android e computer: menu del browser → Installa app / Aggiungi a schermata Home. I dati restano disponibili anche senza rete.',
+    instIos: 'Metti {s} nella schermata Home: pochi tocchi, una volta sola. Poi si apre dall’icona, anche senza rete.',
+    instAnd: 'Installa {s} come app: icona nella schermata Home, funziona anche senza rete.', instBtn: 'Installa {s}',
+    installed: 'Installata. Apri {s} dalla sua icona.', how: 'Mostrami come',
+    hsT: 'Metti {s} nella schermata Home', hsS: 'Pochi tocchi, una volta sola. Poi aprila dall’icona.',
+    hsNew: ['Tocca <b>☰</b> accanto all’indirizzo', 'Tocca <b>Condividi</b>', 'Tocca la freccia <b>⌄</b>, poi <b>Aggiungi alla schermata Home</b>',
+      'Disattiva <b>“Apri come app web”</b>, poi tocca <b>Aggiungi</b>'],
+    hsOld: ['Tocca <b>Condividi</b> in basso', 'Scorri e tocca <b>Aggiungi alla schermata Home</b>', 'Tocca <b>Aggiungi</b>'],
+    hsCap: ['Tocca ☰ accanto all’indirizzo', 'Condividi', 'La freccia ⌄', 'Aggiungi alla schermata Home', 'Disattiva “Apri come app web”, poi Aggiungi'],
+    hsNote: 'Non vedi ☰ o Condividi? Apri prima questa pagina in Safari.', pic: 'Mostra le immagini', picHide: 'Nascondi le immagini', later: 'Più tardi',
     iosApp: 'Su iPhone, dentro l’app della schermata Home il file non si scarica. Elimina questa icona e aggiungila di nuovo da Safari con “Apri come app web” disattivato.',
     forget: 'Rimuovi dati e chiave da questo dispositivo', forgetQ: 'Rimuovere i dati e la chiave da questo dispositivo?',
     loading: 'Apertura del file…', loaded: 'Dati del {lm} caricati.', bad: 'File non accettato: ', older: 'Questo file è più vecchio dei dati che hai già ({lm}): non caricato.',
@@ -104,7 +163,16 @@
     upd: 'Update the data', get: 'Download the new data file', file: 'Load the downloaded file',
     hint: 'New data every 2 hours on working days. Step 1 opens the file in MSC OneDrive: if asked, sign in with your company account; the file goes to Downloads (after signing in the page may stay white: the file is downloading, blue arrow in the address bar). Then come back here and in step 2 choose the newest .dat file.',
     check: 'Check for new data', instH: 'Use it like an app',
-    inst: 'iPhone: Safari → Share → Add to Home Screen → turn off “Open as Web App” → Add. Android: menu ⋮ → Add to Home screen. The data stays available without network.',
+    inst: 'iPhone: Safari → ☰ next to the address → Share → Add to Home Screen → turn off “Open as Web App” → Add. Android and computer: browser menu → Install app / Add to Home screen. The data stays available without network.',
+    instIos: 'Put {s} on the Home Screen: a few taps, once. Then it opens from the icon, also without network.',
+    instAnd: 'Install {s} as an app: icon on the Home screen, works without network.', instBtn: 'Install {s}',
+    installed: 'Installed. Open {s} from its icon.', how: 'Show me how',
+    hsT: 'Put {s} on your Home Screen', hsS: 'A few taps, once. Then open it from the icon.',
+    hsNew: ['Tap <b>☰</b> next to the address', 'Tap <b>Share</b>', 'Tap <b>View More ⌄</b>, then <b>Add to Home Screen</b>',
+      'Turn <b>off</b> “Open as Web App”, then tap <b>Add</b>'],
+    hsOld: ['Tap <b>Share</b> at the bottom', 'Scroll down, tap <b>Add to Home Screen</b>', 'Tap <b>Add</b>'],
+    hsCap: ['Tap ☰ next to the address', 'Share', 'View More ⌄', 'Add to Home Screen', 'Turn off “Open as Web App”, then Add'],
+    hsNote: 'No ☰ or Share? Open this page in Safari first.', pic: 'Show pictures', picHide: 'Hide pictures', later: 'Later',
     iosApp: 'On iPhone the data file cannot be downloaded inside the Home Screen app. Delete this icon and add it again from Safari with “Open as Web App” turned off.',
     forget: 'Remove data and key from this device', forgetQ: 'Remove the data and the key from this device?',
     loading: 'Opening the file…', loaded: 'Data of {lm} loaded.', bad: 'This file was not accepted: ', older: 'This file is older than the data you already have ({lm}): not loaded.',
@@ -116,13 +184,28 @@
   var STANDALONE = (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
   var cfg = null, cur = null, fresh = false;
 
+  /* "Put it on the Home Screen" (r13). iPhone: Safari never lets a page add its icon, so a card with the steps (and real
+     Safari screens, help/ios1-5.jpg, iOS 27.2) comes up the first time the access link is opened. Since iOS 26 Share sits
+     in the ☰ menu next to the address and "Add to Home Screen" under "View More". Android and computers: the browser
+     offers an install ("beforeinstallprompt", Chrome, Edge, Samsung Internet): our Install button, then the browser's own
+     confirmation; nothing installs without it. */
+  var SHORT = 'Deck Map';
+  var UA = navigator.userAgent;
+  var IOS = /iPhone|iPad|iPod/.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
+  var IPHONE = /iPhone|iPod/.test(UA);
+  var SAFARIV = (/Version\/(\d+)/.exec(UA) || [])[1];
+  var NEWIOS = IOS && (!SAFARIV || +SAFARIV >= 26);          // ☰ menu, "View More", "Open as Web App" switch
+  var bip = null;                                             // the browser's install offer, kept for our button
+  /* marks on the pictures, in % of the screen: [left, top, width, height]; a ring: [centre x, centre y] */
+  var MARKS = [[[26.1, 93.9]], [[24, 49.6, 48, 4.6]], [[74, 86.2, 17, 11.2]], [[8, 64.8, 86, 5.2]], [[80, 30.4, 16.4, 4.4], [80, 8.2, 16.4, 5]]];
+
   function show(id, on) { $(id).classList.toggle('hide', !on); }
   function msg(t, cls) { show('c-msg', !!t); $('msg').textContent = t || ''; $('msg').className = cls || ''; }
   function prog(p) { show('prog', p !== null); if (p !== null) $('prog').firstChild.style.width = Math.round(p) + '%'; }
   function fill(s, o) { return s.replace(/\{(\w+)\}/g, function (_, k) { return o[k]; }); }
 
   ['sub:h-sub', 'setup:t-setup', 'save:b-save', 'open:b-open', 'upd:t-upd', 'get:t-get', 'file:t-file', 'hint:t-hint',
-   'check:b-check', 'instH:t-inst-h', 'inst:t-inst', 'forget:b-forget', 'iosApp:t-ios'].forEach(function (p) {
+   'check:b-check', 'instH:t-inst-h', 'inst:t-inst', 'how:b-how', 'forget:b-forget', 'iosApp:t-ios'].forEach(function (p) {
     var a = p.split(':'); $(a[1]).textContent = T[a[0]];
   });
   if (IT) document.documentElement.lang = 'it';
@@ -136,9 +219,49 @@
     return Promise.all([MSCR.get('cfg'), MSCR.get('cur')]).then(function (a) { cfg = a[0] || null; cur = a[1] || null; });
   }
 
+  function instUI() {
+    show('b-inst', !!bip); show('b-how', IOS && !bip);
+    $('t-inst').textContent = fill(bip ? T.instAnd : IOS ? T.instIos : T.inst, { s: SHORT });
+    $('c-install').classList.toggle('attn', !!bip);
+  }
+
+  var ICONS = {
+    menu: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 9h14M5 13h14M5 17h9"/></svg>',
+    share: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M7 11H6a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>',
+    more: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+    plus: '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8v8M8 12h8" stroke-linecap="round"/></svg>',
+    off: '<span style="display:inline-block;width:34px;height:20px;border-radius:10px;background:#d1d5db;position:relative"><span style="position:absolute;left:2px;top:2px;width:16px;height:16px;border-radius:8px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3)"></span></span>'
+  };
+  function hintOpen() {
+    $('hs-t').textContent = fill(T.hsT, { s: SHORT }); $('hs-s').textContent = T.hsS; $('hs-note').textContent = T.hsNote;
+    var steps = NEWIOS ? T.hsNew : T.hsOld, ics = NEWIOS ? ['menu', 'share', 'more', 'off'] : ['share', 'plus', 'plus'];
+    $('hs-steps').innerHTML = steps.map(function (t, i) {
+      return '<li><span class="n">' + (i + 1) + '</span><span class="ic">' + ICONS[ics[i]] + '</span><span>' + t + '</span></li>';
+    }).join('');
+    show('hs-pic', NEWIOS); $('hs-pic').textContent = T.pic; $('hs-close').textContent = T.later;
+    show('hs-steps', true); show('hs-pics', false);
+    show('hs-arrow', NEWIOS && IPHONE && !STANDALONE);
+    show('hs', true);
+  }
+  function hintPics() {
+    var box = $('hs-pics');
+    if (!box.firstChild) box.innerHTML = MARKS.map(function (ms, i) {
+      var mk = ms.map(function (m) {
+        return m.length === 2 ? '<i class="mk ring" style="left:' + m[0] + '%;top:' + m[1] + '%"></i>'
+          : '<i class="mk" style="left:' + m[0] + '%;top:' + m[1] + '%;width:' + m[2] + '%;height:' + m[3] + '%"></i>';
+      }).join('');
+      return '<figure><div class="pic"><img src="help/ios' + (i + 1) + '.jpg" alt="" loading="lazy">' + mk + '</div><figcaption>' +
+        (i + 1) + '. ' + T.hsCap[i] + '</figcaption></figure>';
+    }).join('');
+    var on = box.classList.contains('hide');
+    show('hs-pics', on); show('hs-steps', !on); show('hs-arrow', !on && IPHONE && !STANDALONE);
+    $('hs-pic').textContent = on ? T.picHide : T.pic;
+  }
+
   function render() {
     show('c-setup', !cfg); show('c-data', !!cfg); show('c-upd', !!cfg); show('c-forget', !!cfg);
     show('c-install', !!cfg && !STANDALONE);
+    instUI();
     if (!cfg) return;
     if (cfg.n) { $('h-name').textContent = cfg.n; document.title = cfg.n; }
     var has = !!(cur && cur.dat);
@@ -190,8 +313,26 @@
       /* straight to the data, unless the person came here to update, or just opened the access link in a browser tab */
       if (cfg && cur && !Q.get('manage') && !Q.get('err') && !(fresh && !STANDALONE)) { location.replace('app'); return; }
       render();
+      /* the first time the access link is opened in Safari on this device: the Home Screen steps */
+      if (cfg && fresh && IOS && !STANDALONE) hintOpen();
     }).catch(function (e) { msg(T.start + e.message, 'err'); render(); });
   }
+
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault(); bip = e;
+    $('b-inst').textContent = fill(T.instBtn, { s: SHORT }); instUI();
+  });
+  window.addEventListener('appinstalled', function () { bip = null; instUI(); msg(fill(T.installed, { s: SHORT }), 'ok'); });
+  $('b-inst').onclick = function () {
+    if (!bip) return;
+    var p = bip; bip = null;                                  // an offer can be shown once; the browser makes a new one later
+    p.prompt();
+    p.userChoice.then(instUI, instUI);
+  };
+  $('b-how').onclick = hintOpen;
+  $('hs-pic').onclick = hintPics;
+  $('hs-close').onclick = function () { show('hs', false); };
+  $('hs').onclick = function (e) { if (e.target === $('hs')) show('hs', false); };
 
   $('b-save').onclick = function () {
     new Promise(function (res) { res(takeLink($('link').value)); }).then(function () { location.replace('./'); }, function (e) { msg(T.link + e.message, 'err'); });
