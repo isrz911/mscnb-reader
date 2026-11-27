@@ -7,6 +7,28 @@
 (function () {
   'use strict';
   var IT = /^it\b/i.test(navigator.language || '');
+
+  /* 3. (r16) The data page is the one people see, so they put it on the Home Screen from here. Its own head has another
+     name and no icon of ours (seen on an iPhone 27.11: an empty icon, "MSC CRM GE"). So the reader's icon and short name
+     replace them here; Safari and Chrome read them at the moment of adding. Off iPhone also the reader's manifest, so
+     that "Install app" in Chrome makes the same app as the Install button on the reader page. */
+  (function () {
+    var h = document.head || document.getElementsByTagName('head')[0];
+    if (!h) return;
+    var ua = navigator.userAgent, ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    Array.prototype.slice.call(h.querySelectorAll('link[rel~="icon"],link[rel="apple-touch-icon"],link[rel="apple-touch-icon-precomposed"],' +
+      'link[rel="manifest"],meta[name="apple-mobile-web-app-title"],meta[name="application-name"]')).forEach(function (n) { n.parentNode.removeChild(n); });
+    function add(tag, attrs) {
+      var n = document.createElement(tag);
+      for (var k in attrs) n.setAttribute(k, attrs[k]);
+      h.appendChild(n);
+    }
+    add('link', { rel: 'apple-touch-icon', href: 'icon-180.png?v=4bebdb09' });
+    add('link', { rel: 'icon', href: 'icon-192.png?v=4bebdb09' });
+    add('meta', { name: 'apple-mobile-web-app-title', content: 'Deck Map' });
+    add('meta', { name: 'application-name', content: 'Deck Map' });
+    if (!ios) add('link', { rel: 'manifest', href: 'reader.webmanifest' });
+  })();
   var shown = '';
   try {
     var t = document.getElementById('crm-snap').firstChild.nodeValue.slice(0, 4000);
