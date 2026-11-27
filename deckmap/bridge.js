@@ -7,6 +7,8 @@
 (function () {
   'use strict';
   var IT = /^it\b/i.test(navigator.language || '');
+  /* r20: did the page know at its start that photos are here (the worker sets the flag before the page's scripts)? */
+  var PH_AT_LOAD = !!window.__MSC_PH, phReload = false;
 
   /* 3. (r16) The data page is the one people see, so they put it on the Home Screen from here. Its own head has another
      name and no icon of ours (seen on an iPhone 27.11: an empty icon, "MSC CRM GE"). So the reader's icon and short name
@@ -64,7 +66,8 @@
       mode = s.mode; if (s.batch) latest = s.batch; return s;
     }).catch(function () { return null; });
   }
-  function newer() { return !!(shown && latest && latest !== shown); }
+  /* new data, or (r20) photos that came after this page built its sheets: the page opens again when nobody uses it */
+  function newer() { return phReload || !!(shown && latest && latest !== shown); }
   function applyIfIdle() { if (newer() && Date.now() - lastInput > 60000) location.reload(); }
   document.addEventListener('visibilitychange', function () {
     if (document.hidden && newer()) location.reload();
@@ -108,7 +111,7 @@
   }
   /* r18: automatic mode, the button "⇅ <age>" on every network: a tap looks for new data now and downloads it (also on a
      mobile network: the person decides), with the megabytes on the button; the worker reports them (BroadcastChannel) */
-  var autoBtn = null, busy = false, small = null;
+  var autoBtn = null, busy = false, small = null, checkedUntil = 0;
   function mbs(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0); }
   var bc = null;
   try { bc = new BroadcastChannel('msc-reader:' + new URL('./', location.href).pathname); } catch (e) { bc = null; }
@@ -128,8 +131,28 @@
     if (!phBtn) { phBtn = document.createElement('button'); document.body.appendChild(phBtn); }
     return phBtn;
   }
+  /* r20 (user 27.11): the photo progress also inside the photo area of the Defects LOG sheet (a srcdoc frame of the page,
+     same origin), under its own note, in megabytes */
+  function phInSheet(text) {
+    var docs = [document];
+    [].forEach.call(document.querySelectorAll('iframe'), function (f) { try { if (f.contentDocument) docs.push(f.contentDocument); } catch (e) {} });
+    docs.forEach(function (d) {
+      var stage = d.getElementById && d.getElementById('stage'), el = d.getElementById && d.getElementById('mscph');
+      if (!stage) return;
+      if (!text) { if (el) el.remove(); return; }
+      if (!el) {
+        el = d.createElement('div'); el.id = 'mscph';
+        el.style.cssText = 'position:absolute;left:50%;top:62%;transform:translateX(-50%);z-index:50;padding:7px 14px;border-radius:14px;' +
+          'background:rgba(0,10,60,.88);color:#fff;font:600 14px/1.3 system-ui,-apple-system,sans-serif;white-space:nowrap;pointer-events:none';
+        stage.appendChild(el);
+      }
+      el.textContent = text;
+    });
+  }
   function phProg(m) {
     if (m.done) {
+      phInSheet(m.err ? null : '📷 ' + (IT ? 'Foto scaricate' : 'Photos downloaded') + (phReload ? (IT ? ': si vedono alla prossima apertura' : ': they show at the next opening') : ''));
+      setTimeout(function () { phInSheet(null); }, 8000);
       phBusy = false;
       if (phBtn) { phBtn.textContent = m.err ? (IT ? '📷 Foto: errore' : '📷 Photos: error') : '📷 ✓'; setTimeout(function () { poll().then(phPill); }, 2500); }
       return;
@@ -138,11 +161,12 @@
     var b = phEl(); b.onclick = null; b.disabled = true;
     b.style.cssText = phStyle('rgba(0,10,60,.80)');
     b.textContent = '📷 ' + mbs(m.got || 0) + ' / ' + mbs(m.bytes || 0) + ' MB';
+    phInSheet('📷 ' + (IT ? 'Download foto: ' : 'Downloading photos: ') + mbs(m.got || 0) + ' / ' + mbs(m.bytes || 0) + ' MB');
   }
   function phPill(s) {
     /* the page decides where photos come from when it builds the Defects LOG sheet; the worker sets this flag at the start
        of the page once the reader knows there are photos, here it is set for a sheet built later in this visit */
-    if (s && s.ph) window.__MSC_PH = 1;
+    if (s && s.ph) { window.__MSC_PH = 1; if (!PH_AT_LOAD) phReload = true; }
     if (phBusy) return;
     var p = s && s.ph;
     if (!p || p.have >= p.total) { if (phBtn) { phBtn.remove(); phBtn = null; } return; }
@@ -171,10 +195,22 @@
       autoBtn.onclick = function () { updateNow(autoBtn); };
       document.body.appendChild(autoBtn);
     }
+    if (Date.now() < checkedUntil) { autoBtn.style.background = s.stale ? 'rgba(154,91,0,.92)' : 'rgba(0,10,60,.80)'; return; }
     autoBtn.style.cssText = pillStyle(s.stale ? 'rgba(154,91,0,.92)' : 'rgba(0,10,60,.80)');
     autoBtn.textContent = '⇅ ' + ageText(s.age);
     autoBtn.title = (IT ? 'Dati del ' : 'Data of ') + (s.lm || '?') + (IT ? '. Tocca per cercare nuovi dati' : '. Tap to look for new data');
     autoBtn.setAttribute('aria-label', autoBtn.title);
+    shrink(autoBtn);
+  }
+  /* r20: after a look the button says for a few seconds when the data was checked ("✓ 07:20") */
+  function checked(s) {
+    if (!autoBtn || busy || !s.seen || !s.last || (s.last.status !== 'same' && s.last.status !== 'new')) return;
+    if (Date.now() - s.seen > 120000) return;
+    checkedUntil = Date.now() + 6000;
+    var d = new Date(s.seen), p = function (n) { return (n < 10 ? '0' : '') + n; };
+    autoBtn.style.width = ''; autoBtn.style.padding = '0 11px'; autoBtn.style.opacity = '1';
+    autoBtn.textContent = '\u2713 ' + p(d.getHours()) + ':' + p(d.getMinutes());
+    autoBtn.title = (IT ? 'Controllato alle ' : 'Checked at ') + p(d.getHours()) + ':' + p(d.getMinutes()) + (IT ? ', dati del ' : ', data of ') + (s.lm || '?');
     shrink(autoBtn);
   }
   function updateNow(btn) {
@@ -230,7 +266,10 @@
   var poll0 = poll;
   poll = function (look) {
     return poll0(look).then(function (s) {
-      if (s && s.mode === 'auto') { showPend(s); autoPill(s); phPill(s); if (look) staleBar(s); }
+      if (s && s.mode === 'auto') {
+        showPend(s); autoPill(s); phPill(s);
+        if (look) { staleBar(s); checked(s); }
+      }
       return s;
     });
   };
