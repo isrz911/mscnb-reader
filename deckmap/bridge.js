@@ -81,58 +81,127 @@
   }, 30000);
 
   function ageText(h) { return h < 0 ? '' : h < 1 ? '<1 h' : h < 48 ? Math.floor(h) + ' h' : Math.floor(h / 24) + (IT ? ' g' : ' d'); }
-  function pillStyle(bg) {
-    return 'position:fixed;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:2147483000;height:32px;' +
-      'padding:0 11px;border-radius:16px;background:' + bg + ';color:#fff;border:0;' +
-      'font:600 13px/32px system-ui,-apple-system,sans-serif;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);white-space:nowrap';
+  function mbs(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0); }
+  function two(n) { return (n < 10 ? '0' : '') + n; }
+  function shortLm(lm) {
+    var m = /^(\d\d)\.(\d\d)\.\d{4}\s+(\d\d:\d\d)/.exec(lm || '');
+    return m ? m[1] + '.' + m[2] + ' ' + m[3] : String(lm || '?').replace(/\s*LT$/, '');
+  }
+  function when(ms) {
+    if (!ms) return IT ? 'mai' : 'never';
+    var d = new Date(ms);
+    return two(d.getDate()) + '.' + two(d.getMonth() + 1) + ' ' + two(d.getHours()) + ':' + two(d.getMinutes());
   }
 
-  /* r17, automatic mode on a network where nothing downloads by itself (an Android phone on mobile data): new data is
-     only announced, with its size; one tap downloads it on this network and opens it */
-  var pendBtn = null;
-  function showPend(s) {
-    if (!s || !s.pend || !s.pend.size) { if (pendBtn) { pendBtn.remove(); pendBtn = null; } return; }
-    var mb = (s.pend.size / 1048576).toFixed(s.pend.size < 10485760 ? 1 : 0);
-    if (!pendBtn) {
-      pendBtn = document.createElement('button');
-      pendBtn.style.cssText = pillStyle('rgba(30,122,58,.95)');
-      pendBtn.onclick = function () {
-        busy = true; pendBtn.disabled = true; pendBtn.textContent = IT ? 'Download…' : 'Downloading…';
-        fetch('state.json?now=1&net=' + (netAllowed() ? 1 : 0), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (n) {
-          busy = false;
-          if (n && n.batch && n.batch !== shown) { location.reload(); return; }
-          pendBtn.disabled = false; showPend(n); autoPill(n);
-        }).catch(function () { busy = false; pendBtn.disabled = false; pendBtn.textContent = IT ? 'Riprova' : 'Try again'; });
-      };
-      document.body.appendChild(pendBtn);
+  /* r21 (user 27.11): ONE badge in the header, in place of the page's own data time (#dm-off, "● 26.11 17:40": a thin dot
+     the eye loses), an oval with the sync sign, in colours that stand out on the navy header:
+       white "⇅ 26.11 17:40"   data here; a tap looks for new data now (on any network: the person decides)
+       green "✓ 26.11 17:40"   just checked; "⇣ New data · 15 MB" / "📷 ⇣ 444 MB": waiting for a tap (Android, mobile data)
+       amber "⇣ 6.1 / 15 MB", "📷 120 / 565 MB": downloading;  "⚠ 26.11 17:40": the data may be out of date
+     Without that element (another page) the same badge sits at the bottom right. Manual mode: a tap opens the reader page. */
+  var HB = null, hbText = '', S = null, busy = false, phBusy = false, dataProg = '', phText = '', msgText = '', msgMode = '', msgUntil = 0, checkedUntil = 0;
+  var CSS = 'html.mscr #dm-off{display:inline-flex!important;align-items:center;background:#fff!important;color:#000A3C!important;' +
+    'font:700 13px/1 system-ui,-apple-system,sans-serif!important;padding:7px 12px!important;border-radius:999px!important;' +
+    'box-shadow:0 1px 8px rgba(0,0,0,.4)!important;cursor:pointer!important;text-decoration:none!important;max-width:62vw!important;' +
+    'white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis;pointer-events:auto!important}' +
+    'html.mscr #dm-off::before{display:none!important}' +
+    /* phones upright: the badge is wider than the page's own pill, so the logo gets a little smaller (it keeps its shape);
+       on sheets without the Filters button the badge moves to the right edge */
+    '@media (orientation:portrait),(min-height:601px){html.mscr .dm-mob #dm-logo{max-width:calc(100vw - 285px - var(--sal) - var(--sar))!important}' +
+    'html.mscr .dm-hf.dm-mob #dm-off{right:calc(10px + var(--sar))!important;left:auto!important}' +
+    'html.mscr .dm-hf.dm-mob #dm-logo{max-width:calc(100vw - 195px - var(--sal) - var(--sar))!important}}' +
+    /* wide screens (tablet sideways, computer): in the navy header at the right, not over the legend at the bottom left */
+    'html.mscr .dm-desk #dm-off{position:fixed!important;top:14px!important;right:16px!important;left:auto!important;bottom:auto!important;' +
+    'transform:none!important;font-size:14px!important;padding:8px 14px!important}' +
+    'html.mscr[data-ms="ok"] #dm-off,html.mscr[data-ms="new"] #dm-off{background:#22C55E!important;color:#052e14!important}' +
+    'html.mscr[data-ms="busy"] #dm-off,html.mscr[data-ms="stale"] #dm-off{background:#EAB308!important;color:#1f1400!important}' +
+    'html.mscr[data-ms="err"] #dm-off{background:#ef4444!important;color:#fff!important}' +
+    '#mscr-hb{position:fixed;right:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:2147483000;border:0;' +
+    'font:700 13px/1 system-ui,-apple-system,sans-serif;padding:9px 13px;border-radius:999px;background:#fff;color:#000A3C;box-shadow:0 2px 8px rgba(0,0,0,.35)}' +
+    'html[data-ms="ok"] #mscr-hb,html[data-ms="new"] #mscr-hb{background:#22C55E;color:#052e14}' +
+    'html[data-ms="busy"] #mscr-hb,html[data-ms="stale"] #mscr-hb{background:#EAB308;color:#1f1400}' +
+    'html[data-ms="err"] #mscr-hb{background:#ef4444;color:#fff}';
+  function hbEl() {
+    if (HB && HB.isConnected) return HB;
+    if (!document.getElementById('mscr-css')) {
+      var st = document.createElement('style'); st.id = 'mscr-css'; st.textContent = CSS; (document.head || document.documentElement).appendChild(st);
     }
-    pendBtn.textContent = '⇣ ' + (IT ? 'Nuovi dati · ' : 'New data · ') + mb + ' MB';
-    pendBtn.title = (IT ? 'Dati del ' : 'Data of ') + (s.pend.lm || '?') + (IT ? '. Tocca per scaricare' : '. Tap to download');
+    var e = document.getElementById('dm-off');
+    if (e) {
+      document.documentElement.classList.add('mscr');
+      e.addEventListener('click', function (ev) { ev.stopPropagation(); ev.preventDefault(); hbTap(); }, true);
+      /* the page writes its own text here now and then (its offline badge): ours stays */
+      try { new MutationObserver(function () { if (hbText && e.textContent !== hbText) e.textContent = hbText; }).observe(e, { childList: true, characterData: true, subtree: true }); } catch (x) {}
+    } else {
+      e = document.createElement('button'); e.id = 'mscr-hb'; e.onclick = hbTap; document.body.appendChild(e);
+    }
+    return (HB = e);
   }
-  /* r18: automatic mode, the button "⇅ <age>" on every network: a tap looks for new data now and downloads it (also on a
-     mobile network: the person decides), with the megabytes on the button; the worker reports them (BroadcastChannel) */
-  var autoBtn = null, busy = false, small = null, checkedUntil = 0;
-  function mbs(n) { return (n / 1048576).toFixed(n < 10485760 ? 1 : 0); }
+  function hb(mode, text, title) {
+    var e = hbEl();
+    document.documentElement.setAttribute('data-ms', mode || 'idle');
+    hbText = text;
+    if (e.textContent !== text) e.textContent = text;
+    e.title = title || '';
+    e.setAttribute('aria-label', title || text);
+  }
+  function phWaiting(s) {                          // photos missing and they do not come by themselves here
+    var p = s && s.ph;
+    return !!(p && p.have < p.total && !(s.auto && netAllowed()));
+  }
+  function render(s) {
+    if (s) S = s;
+    s = S;
+    if (!s) return;
+    var lm = shortLm(s.lm), tip = (IT ? 'Dati del ' : 'Data of ') + (s.lm || '?');
+    if (dataProg) return hb('busy', '\u21e3 ' + dataProg, tip);
+    if (Date.now() < msgUntil) return hb(msgMode, msgText, tip);
+    if (phText) return hb('busy', phText, IT ? 'Download delle foto dei difetti' : 'Downloading the photos of the defects');
+    if (s.mode === 'auto' && s.pend && s.pend.size) {
+      return hb('new', '\u21e3 ' + (IT ? 'Nuovi dati \u00b7 ' : 'New data \u00b7 ') + mbs(s.pend.size) + ' MB',
+                (IT ? 'Dati del ' : 'Data of ') + (s.pend.lm || '?') + (IT ? '. Tocca per scaricare' : '. Tap to download'));
+    }
+    if (s.mode === 'auto' && phWaiting(s)) {
+      return hb('new', '\ud83d\udcf7 \u21e3 ' + mbs(s.ph.bytes - s.ph.haveBytes) + ' MB', IT ? 'Tocca per scaricare le foto dei difetti' : 'Tap to download the photos of the defects');
+    }
+    if (Date.now() < checkedUntil) return hb('ok', '\u2713 ' + lm, (IT ? 'Controllato alle ' : 'Checked at ') + when(s.seen).slice(6) + '. ' + tip);
+    if (s.mode === 'manual') return hb(s.age >= 24 ? 'stale' : 'idle', (s.age >= 24 ? '\u26a0 ' : '\u21c5 ') + lm, tip + (IT ? '. Aggiorna i dati' : '. Update the data'));
+    hb(s.stale ? 'stale' : 'idle', (s.stale ? '\u26a0 ' : '\u21c5 ') + lm, tip + (IT ? '. Tocca per cercare nuovi dati' : '. Tap to look for new data'));
+  }
+  function say(mode, text, ms) { msgMode = mode; msgText = text; msgUntil = Date.now() + ms; render(); setTimeout(render, ms + 50); }
+  function hbTap() {
+    var s = S;
+    if (!s || busy || phBusy) return;
+    if (s.mode === 'manual') { location.href = './?manage=1'; return; }
+    if (!(s.pend && s.pend.size) && phWaiting(s)) { photosNow(); return; }
+    dataNow();
+  }
+  /* data now, on any network; the megabytes come from the worker */
+  function dataNow() {
+    busy = true; dataProg = '\u2026'; render();
+    fetch('state.json?now=1&net=' + (netAllowed() ? 1 : 0), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (n) {
+      busy = false; dataProg = '';
+      if (n && n.batch && n.batch !== shown) { location.reload(); return; }
+      var err = n && n.last && n.last.status === 'err';
+      S = n || S; staleBar(n);
+      say(err ? 'err' : 'ok', err ? (IT ? 'Nessuna connessione' : 'No connection') : '\u2713 ' + (IT ? 'Aggiornati' : 'Up to date'), 3000);
+    }).catch(function () { busy = false; dataProg = ''; say('err', IT ? 'Nessuna connessione' : 'No connection', 3000); });
+  }
+  function photosNow() {
+    phBusy = true; phText = '\ud83d\udcf7 \u2026'; render();
+    fetch('state.json?ph=1&now=1&net=' + (netAllowed() ? 1 : 0), { cache: 'no-store' }).catch(function () { phBusy = false; phText = ''; render(); });
+  }
   var bc = null;
   try { bc = new BroadcastChannel('msc-reader:' + new URL('./', location.href).pathname); } catch (e) { bc = null; }
   if (bc) bc.onmessage = function (e) {
-    var m = e.data || {}, b = busy && (autoBtn || pendBtn);
-    if (m.t === 'prog' && b && m.total) { b.style.width = ''; b.style.padding = '0 11px'; b.textContent = '⇣ ' + mbs(m.got) + ' / ' + mbs(m.total) + ' MB'; }
+    var m = e.data || {};
+    if (m.t === 'prog' && busy && m.total) { dataProg = mbs(m.got) + ' / ' + mbs(m.total) + ' MB'; render(); }
     if (m.t === 'phprog') phProg(m);
     if (m.t === 'phstate' && !phBusy) poll();
   };
 
-  /* r19: photos of Defects LOG (CRM). While the worker downloads the packs: "📷 120 / 566 MB" at the bottom left; on a
-     network without automatic downloads (Android on mobile data), while photos are missing: "📷 Photos · 444 MB", a tap
-     downloads them on this network. */
-  var phBtn = null, phBusy = false;
-  function phStyle(bg) { return pillStyle(bg).replace('right:10px', 'left:10px'); }
-  function phEl() {
-    if (!phBtn) { phBtn = document.createElement('button'); document.body.appendChild(phBtn); }
-    return phBtn;
-  }
   /* r20 (user 27.11): the photo progress also inside the photo area of the Defects LOG sheet (a srcdoc frame of the page,
-     same origin), under its own note, in megabytes */
+     same origin), under its own note, in megabytes; r21: in the colours of the badge */
   function phInSheet(text) {
     var docs = [document];
     [].forEach.call(document.querySelectorAll('iframe'), function (f) { try { if (f.contentDocument) docs.push(f.contentDocument); } catch (e) {} });
@@ -142,8 +211,8 @@
       if (!text) { if (el) el.remove(); return; }
       if (!el) {
         el = d.createElement('div'); el.id = 'mscph';
-        el.style.cssText = 'position:absolute;left:50%;top:62%;transform:translateX(-50%);z-index:50;padding:7px 14px;border-radius:14px;' +
-          'background:rgba(0,10,60,.88);color:#fff;font:600 14px/1.3 system-ui,-apple-system,sans-serif;white-space:nowrap;pointer-events:none';
+        el.style.cssText = 'position:absolute;left:50%;top:62%;transform:translateX(-50%);z-index:50;padding:8px 14px;border-radius:999px;' +
+          'background:#EAB308;color:#1f1400;font:700 14px/1.3 system-ui,-apple-system,sans-serif;white-space:nowrap;pointer-events:none;box-shadow:0 2px 10px rgba(0,0,0,.4)';
         stage.appendChild(el);
       }
       el.textContent = text;
@@ -151,105 +220,46 @@
   }
   function phProg(m) {
     if (m.done) {
-      phInSheet(m.err ? null : '📷 ' + (IT ? 'Foto scaricate' : 'Photos downloaded') + (phReload ? (IT ? ': si vedono alla prossima apertura' : ': they show at the next opening') : ''));
+      phBusy = false; phText = '';
+      phInSheet(m.err ? null : '\ud83d\udcf7 ' + (IT ? 'Foto scaricate' : 'Photos downloaded') + (phReload ? (IT ? ': si vedono alla prossima apertura' : ': they show at the next opening') : ''));
       setTimeout(function () { phInSheet(null); }, 8000);
-      phBusy = false;
-      if (phBtn) { phBtn.textContent = m.err ? (IT ? '📷 Foto: errore' : '📷 Photos: error') : '📷 ✓'; setTimeout(function () { poll().then(phPill); }, 2500); }
+      say(m.err ? 'err' : 'ok', m.err ? '\ud83d\udcf7 ' + (IT ? 'Foto: errore' : 'Photos: error') : '\ud83d\udcf7 \u2713', 3000);
+      setTimeout(function () { poll(); }, 3100);
       return;
     }
     phBusy = true;
-    var b = phEl(); b.onclick = null; b.disabled = true;
-    b.style.cssText = phStyle('rgba(0,10,60,.80)');
-    b.textContent = '📷 ' + mbs(m.got || 0) + ' / ' + mbs(m.bytes || 0) + ' MB';
-    phInSheet('📷 ' + (IT ? 'Download foto: ' : 'Downloading photos: ') + mbs(m.got || 0) + ' / ' + mbs(m.bytes || 0) + ' MB');
+    phText = '\ud83d\udcf7 ' + mbs(m.got || 0) + ' / ' + mbs(m.bytes || 0) + ' MB';
+    render();
+    phInSheet('\ud83d\udcf7 ' + (IT ? 'Download foto: ' : 'Downloading photos: ') + mbs(m.got || 0) + ' / ' + mbs(m.bytes || 0) + ' MB');
   }
-  function phPill(s) {
+  function photoFlag(s) {
     /* the page decides where photos come from when it builds the Defects LOG sheet; the worker sets this flag at the start
        of the page once the reader knows there are photos, here it is set for a sheet built later in this visit */
     if (s && s.ph) { window.__MSC_PH = 1; if (!PH_AT_LOAD) phReload = true; }
-    if (phBusy) return;
-    var p = s && s.ph;
-    if (!p || p.have >= p.total) { if (phBtn) { phBtn.remove(); phBtn = null; } return; }
-    if (s.auto && netAllowed()) { if (phBtn) { phBtn.remove(); phBtn = null; } return; }   // they come by themselves
-    var b = phEl(); b.disabled = false;
-    b.style.cssText = phStyle('rgba(30,122,58,.95)');
-    b.textContent = '📷 ' + (IT ? 'Foto · ' : 'Photos · ') + mbs(p.bytes - p.haveBytes) + ' MB';
-    b.title = IT ? 'Tocca per scaricare le foto dei difetti' : 'Tap to download the photos of the defects';
-    b.onclick = function () {
-      phBusy = true; b.disabled = true; b.textContent = '📷 …';
-      fetch('state.json?ph=1&now=1&net=' + (netAllowed() ? 1 : 0), { cache: 'no-store' }).catch(function () { phBusy = false; });
-    };
   }
-  function shrink(el) {
-    clearTimeout(small);
-    small = setTimeout(function () {
-      if (busy || !el.isConnected) return;
-      el.textContent = '⇅'; el.style.padding = '0'; el.style.width = '32px'; el.style.textAlign = 'center'; el.style.opacity = '.85';
-    }, 6000);
-  }
-  function autoPill(s) {
-    if (!s || s.mode !== 'auto' || (s.pend && s.pend.size)) { if (autoBtn) { autoBtn.remove(); autoBtn = null; } return; }
-    if (busy) return;
-    if (!autoBtn) {
-      autoBtn = document.createElement('button');
-      autoBtn.onclick = function () { updateNow(autoBtn); };
-      document.body.appendChild(autoBtn);
-    }
-    if (Date.now() < checkedUntil) { autoBtn.style.background = s.stale ? 'rgba(154,91,0,.92)' : 'rgba(0,10,60,.80)'; return; }
-    autoBtn.style.cssText = pillStyle(s.stale ? 'rgba(154,91,0,.92)' : 'rgba(0,10,60,.80)');
-    autoBtn.textContent = '⇅ ' + ageText(s.age);
-    autoBtn.title = (IT ? 'Dati del ' : 'Data of ') + (s.lm || '?') + (IT ? '. Tocca per cercare nuovi dati' : '. Tap to look for new data');
-    autoBtn.setAttribute('aria-label', autoBtn.title);
-    shrink(autoBtn);
-  }
-  /* r20: after a look the button says for a few seconds when the data was checked ("✓ 07:20") */
+  /* r20: after a look the badge says for a few seconds that the data was checked */
   function checked(s) {
-    if (!autoBtn || busy || !s.seen || !s.last || (s.last.status !== 'same' && s.last.status !== 'new')) return;
+    if (busy || !s.seen || !s.last || (s.last.status !== 'same' && s.last.status !== 'new')) return;
     if (Date.now() - s.seen > 120000) return;
     checkedUntil = Date.now() + 6000;
-    var d = new Date(s.seen), p = function (n) { return (n < 10 ? '0' : '') + n; };
-    autoBtn.style.width = ''; autoBtn.style.padding = '0 11px'; autoBtn.style.opacity = '1';
-    autoBtn.textContent = '\u2713 ' + p(d.getHours()) + ':' + p(d.getMinutes());
-    autoBtn.title = (IT ? 'Controllato alle ' : 'Checked at ') + p(d.getHours()) + ':' + p(d.getMinutes()) + (IT ? ', dati del ' : ', data of ') + (s.lm || '?');
-    shrink(autoBtn);
-  }
-  function updateNow(btn) {
-    if (busy) return;
-    busy = true; btn.disabled = true;
-    btn.style.width = ''; btn.style.padding = '0 11px'; btn.style.opacity = '1';
-    btn.textContent = IT ? 'Controllo…' : 'Checking…';
-    fetch('state.json?now=1&net=' + (netAllowed() ? 1 : 0), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (n) {
-      busy = false; btn.disabled = false;
-      if (n && n.batch && n.batch !== shown) { location.reload(); return; }
-      var err = n && n.last && n.last.status === 'err';
-      btn.textContent = err ? (IT ? 'Nessuna connessione' : 'No connection') : (IT ? '✓ Aggiornati' : '✓ Up to date');
-      staleBar(n);
-      setTimeout(function () { showPend(n); autoPill(n); }, 2500);
-    }).catch(function () {
-      busy = false; btn.disabled = false; btn.textContent = IT ? 'Nessuna connessione' : 'No connection';
-    });
+    setTimeout(render, 6100);
   }
 
-  /* r18: a reminder at the top when the data may be out of date: the source could not be reached since new data may have
-     come (no network, phone off), or (manual mode) the data is older than a day. Closes with x; comes back while it is so. */
+  /* r18: a reminder under the header when the data may be out of date: the source could not be reached since new data may
+     have come (no network, phone off), or (manual mode) the data is older than a day. Closes with x; comes back while so. */
   var bar = null, barOff = false;
-  function when(ms) {
-    if (!ms) return IT ? 'mai' : 'never';
-    var d = new Date(ms), p = function (n) { return (n < 10 ? '0' : '') + n; };
-    return p(d.getDate()) + '.' + p(d.getMonth() + 1) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
-  }
   function staleBar(s) {
     var on = !!(s && s.stale) && !barOff;
     if (!on) { if (bar) { bar.remove(); bar = null; } return; }
     if (!bar) {
       bar = document.createElement('div');
-      bar.style.cssText = 'position:fixed;left:8px;right:8px;top:calc(8px + env(safe-area-inset-top));z-index:2147483001;' +
-        'background:#9a5b00;color:#fff;border-radius:10px;padding:9px 34px 9px 12px;box-shadow:0 3px 12px rgba(0,0,0,.35);' +
-        'font:500 13px/1.35 system-ui,-apple-system,sans-serif';
+      bar.style.cssText = 'position:fixed;left:8px;right:8px;top:calc(60px + env(safe-area-inset-top));z-index:2147483001;' +
+        'background:#EAB308;color:#1f1400;border-radius:10px;padding:9px 34px 9px 12px;box-shadow:0 3px 12px rgba(0,0,0,.35);' +
+        'font:600 13px/1.35 system-ui,-apple-system,sans-serif';
       var x = document.createElement('button');
-      x.textContent = '×';
+      x.textContent = '\u00d7';
       x.setAttribute('aria-label', IT ? 'Chiudi' : 'Close');
-      x.style.cssText = 'position:absolute;right:4px;top:4px;width:28px;height:28px;border:0;background:none;color:#fff;font:600 18px/28px system-ui';
+      x.style.cssText = 'position:absolute;right:4px;top:4px;width:28px;height:28px;border:0;background:none;color:#1f1400;font:700 18px/28px system-ui';
       x.onclick = function () { barOff = true; staleBar(null); };
       bar.appendChild(document.createElement('span'));
       bar.appendChild(x);
@@ -257,18 +267,19 @@
     }
     var lm = (s.lm || '?').replace(/\s*LT$/, '');
     bar.firstChild.textContent = s.mode === 'auto'
-      ? (IT ? 'I dati potrebbero non essere aggiornati: dati del ' + lm + ', ultimo controllo ' + when(s.seen) + '. Collegati a internet o tocca ⇅.'
-            : 'The data may be out of date: data of ' + lm + ', last checked ' + when(s.seen) + '. Connect to the internet or tap ⇅.')
-      : (IT ? 'Dati del ' + lm + ': più di un giorno fa. Aggiorna i dati con ⇅.'
-            : 'Data of ' + lm + ': more than a day old. Update the data with ⇅.');
+      ? (IT ? 'I dati potrebbero non essere aggiornati: dati del ' + lm + ', ultimo controllo ' + when(s.seen) + '. Collegati a internet o tocca \u26a0 in alto.'
+            : 'The data may be out of date: data of ' + lm + ', last checked ' + when(s.seen) + '. Connect to the internet or tap \u26a0 at the top.')
+      : (IT ? 'Dati del ' + lm + ': più di un giorno fa. Tocca \u26a0 in alto per aggiornare.'
+            : 'Data of ' + lm + ': more than a day old. Tap \u26a0 at the top to update.');
   }
 
   var poll0 = poll;
   poll = function (look) {
     return poll0(look).then(function (s) {
-      if (s && s.mode === 'auto') {
-        showPend(s); autoPill(s); phPill(s);
+      if (s && (s.mode === 'auto' || s.mode === 'manual')) {
+        photoFlag(s);
         if (look) { staleBar(s); checked(s); }
+        render(s);
       }
       return s;
     });
@@ -276,17 +287,6 @@
 
   poll().then(function (s) {
     if (s && s.mode === 'auto') { setTimeout(function () { poll(true); }, 2000); return; }   // opened: look now
-    if (!s || s.mode !== 'manual') return;
-    staleBar(s);
-    var a = document.createElement('a'), old = s.age >= 24;
-    a.href = './?manage=1';
-    a.textContent = '⇅ ' + ageText(s.age);
-    a.title = (IT ? 'Dati del ' : 'Data of ') + (s.lm || '?') + (IT ? '. Aggiorna i dati' : '. Update the data');
-    a.setAttribute('aria-label', a.title);
-    a.style.cssText = pillStyle(old ? 'rgba(154,91,0,.92)' : 'rgba(0,10,60,.80)');
-    document.body.appendChild(a);
-    /* the age stays readable for a few seconds, then the button shrinks to a small round arrow so that it covers less of
-       the page (seen on an iPhone 27.11: it hid chart labels); the full text stays in its title and on the reader page */
-    shrink(a);
+    if (s && s.mode === 'manual') staleBar(s);
   });
 })();
