@@ -120,7 +120,10 @@
     'font:700 13px/1 system-ui,-apple-system,sans-serif;padding:9px 13px;border-radius:999px;background:#fff;color:#000A3C;box-shadow:0 2px 8px rgba(0,0,0,.35)}' +
     'html[data-ms="ok"] #mscr-hb,html[data-ms="new"] #mscr-hb{background:#22C55E;color:#052e14}' +
     'html[data-ms="busy"] #mscr-hb,html[data-ms="stale"] #mscr-hb{background:#EAB308;color:#1f1400}' +
-    'html[data-ms="err"] #mscr-hb{background:#ef4444;color:#fff}';
+    'html[data-ms="err"] #mscr-hb{background:#ef4444;color:#fff}' +
+    /* r22: a photo of Defects LOG on the whole screen (guest page c56 puts dm-deffs on <html>): the badge and the reminder
+       step aside, they would cover the photo and its strip of thumbnails */
+    'html.mscr.dm-deffs #dm-off,html.dm-deffs #mscr-hb,html.dm-deffs #mscr-bar{display:none!important}';
   function hbEl() {
     if (HB && HB.isConnected) return HB;
     if (!document.getElementById('mscr-css')) {
@@ -253,6 +256,7 @@
     if (!on) { if (bar) { bar.remove(); bar = null; } return; }
     if (!bar) {
       bar = document.createElement('div');
+      bar.id = 'mscr-bar';
       bar.style.cssText = 'position:fixed;left:8px;right:8px;top:calc(60px + env(safe-area-inset-top));z-index:2147483001;' +
         'background:#EAB308;color:#1f1400;border-radius:10px;padding:9px 34px 9px 12px;box-shadow:0 3px 12px rgba(0,0,0,.35);' +
         'font:600 13px/1.35 system-ui,-apple-system,sans-serif';
