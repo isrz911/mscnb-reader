@@ -49,5 +49,11 @@
       'padding:0 11px;border-radius:16px;background:' + (old ? 'rgba(154,91,0,.92)' : 'rgba(0,10,60,.80)') + ';color:#fff;' +
       'font:600 13px/32px system-ui,-apple-system,sans-serif;text-decoration:none;box-shadow:0 2px 8px rgba(0,0,0,.3);white-space:nowrap';
     document.body.appendChild(a);
+    /* the age stays readable for a few seconds, then the button shrinks to a small round arrow so that it covers less of
+       the page (seen on an iPhone 27.11: it hid chart labels); the full text stays in its title and on the reader page */
+    setTimeout(function () {
+      a.textContent = '\u21c5';
+      a.style.padding = '0'; a.style.width = '32px'; a.style.textAlign = 'center'; a.style.opacity = '.85';
+    }, 6000);
   });
 })();
